@@ -4,12 +4,13 @@ import { auth, mintSession } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { passkey, user } from '$lib/server/db/schema';
 import {
-	PRESENCE_COOKIE,
 	issuePresence,
+	presenceCookie,
 	presenceCookieOptions,
 	verifyBucketToken,
 	verifyPresence
-} from '$lib/server/claim-token';
+} from '$lib/server/scan-token';
+import { tooManyAttempts } from '$lib/server/throttle';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -20,46 +21,32 @@ import type { Actions, PageServerLoad } from './$types';
 const NO_MATCH = 'We could not set that account up. Check the address, or ask at the desk.';
 const NO_PRESENCE = 'This code has expired. Scan the current one at the desk.';
 
-/** Cheap in-memory throttle per presence cookie, for the same reason. */
-const attempts = new Map<string, { count: number; resetAt: number }>();
+/** Throttled per presence cookie, for the same reason. */
 const MAX_ATTEMPTS = 10;
-const ATTEMPT_WINDOW_MS = 60_000;
 
-// ponytail: per-process counter, so it resets on redeploy and doesn't add up
-// across instances. Fine for one box at one event; move to the DB if this ever
-// runs more than once.
-function tooManyAttempts(key: string) {
-	const now = Date.now();
-	const entry = attempts.get(key);
-
-	if (!entry || entry.resetAt < now) {
-		attempts.set(key, { count: 1, resetAt: now + ATTEMPT_WINDOW_MS });
-		return false;
-	}
-	entry.count += 1;
-	return entry.count > MAX_ATTEMPTS;
-}
+const COOKIE = presenceCookie('claim');
+const COOKIE_OPTIONS = presenceCookieOptions('claim');
 
 export const load: PageServerLoad = (event) => {
 	// Already signed in and set up? Nothing to claim.
 	if (event.locals.user?.claimedAt) redirect(302, '/');
 
 	const token = event.url.searchParams.get('t');
-	if (token && verifyBucketToken(token)) {
+	if (token && verifyBucketToken('claim', token)) {
 		// Outlives the 30s rotation, so the code changing mid-typing costs nothing.
-		event.cookies.set(PRESENCE_COOKIE, issuePresence(), presenceCookieOptions);
+		event.cookies.set(COOKIE, issuePresence('claim'), COOKIE_OPTIONS);
 		redirect(302, '/claim');
 	}
 
-	const present = verifyPresence(event.cookies.get(PRESENCE_COOKIE));
+	const present = verifyPresence('claim', event.cookies.get(COOKIE));
 	return { present, user: event.locals.user ?? null };
 };
 
 export const actions: Actions = {
 	submitEmail: async (event) => {
-		const presence = event.cookies.get(PRESENCE_COOKIE);
-		if (!verifyPresence(presence)) return fail(403, { message: NO_PRESENCE });
-		if (tooManyAttempts(presence!)) return fail(429, { message: NO_MATCH });
+		const presence = event.cookies.get(COOKIE);
+		if (!verifyPresence('claim', presence)) return fail(403, { message: NO_PRESENCE });
+		if (tooManyAttempts(presence!, MAX_ATTEMPTS)) return fail(429, { message: NO_MATCH });
 
 		const email = (await event.request.formData()).get('email')?.toString().trim() ?? '';
 
@@ -115,6 +102,6 @@ async function markClaimed(event: Parameters<Actions[string]>[0]) {
 		.set({ claimedAt: sql`(cast(unixepoch('subsecond') * 1000 as integer))` })
 		.where(and(eq(user.id, current.id), isNull(user.claimedAt)));
 
-	event.cookies.delete(PRESENCE_COOKIE, presenceCookieOptions);
+	event.cookies.delete(COOKIE, COOKIE_OPTIONS);
 	redirect(302, '/');
 }

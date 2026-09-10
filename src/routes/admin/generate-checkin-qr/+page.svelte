@@ -6,21 +6,14 @@
 	let { data }: { data: PageServerData } = $props();
 </script>
 
-<svelte:head><title>Check-in desk</title></svelte:head>
+<svelte:head><title>Check in</title></svelte:head>
 
-<QrScreen
-	title="Scan to set up your account"
-	qr={data.qr}
-	msUntilNextBucket={data.msUntilNextBucket}
->
+<QrScreen title="Scan to check in" qr={data.qr} msUntilNextBucket={data.msUntilNextBucket}>
 	<p class="text-gray-600">
-		{data.claimed} of {data.total} accounts set up. This code changes automatically — leave this page
-		open.
+		{data.present} of {data.expected} guests here. This code changes automatically — leave this page open.
 	</p>
 	<div class="flex gap-4">
-		<a href={resolve('/admin/generate-checkin-qr')} class="text-blue-600 underline">
-			Show the check-in code
-		</a>
+		<a href={resolve('/admin')} class="text-blue-600 underline">Show the account setup code</a>
 		<a href={resolve('/admin/checkins')} class="text-blue-600 underline">Check-in log</a>
 	</div>
 </QrScreen>
