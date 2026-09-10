@@ -17,7 +17,10 @@
 		{data.claimed} of {data.total} accounts set up. This code changes automatically — leave this page
 		open.
 	</p>
-	<a href={resolve('/admin/generate-checkin-qr')} class="text-blue-600 underline">
-		Show the check-in code
-	</a>
+	<div class="flex gap-4">
+		<a href={resolve('/admin/generate-checkin-qr')} class="text-blue-600 underline">
+			Show the check-in code
+		</a>
+		<a href={resolve('/admin/checkins')} class="text-blue-600 underline">Check-in log</a>
+	</div>
 </QrScreen>

@@ -12,5 +12,8 @@
 	<p class="text-gray-600">
 		{data.present} of {data.expected} guests here. This code changes automatically — leave this page open.
 	</p>
-	<a href={resolve('/admin')} class="text-blue-600 underline">Show the account setup code</a>
+	<div class="flex gap-4">
+		<a href={resolve('/admin')} class="text-blue-600 underline">Show the account setup code</a>
+		<a href={resolve('/admin/checkins')} class="text-blue-600 underline">Check-in log</a>
+	</div>
 </QrScreen>

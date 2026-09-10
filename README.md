@@ -142,6 +142,12 @@ while a later scan gets a row of its own.
 Guests who scan the check-in code before claiming are sent to `/claim` — there is no
 credential for them to confirm with yet.
 
+`/admin/checkins` is the log: every row, newest first, with the two things worth seeing
+at a glance flagged. `again` is a guest who had already checked in earlier; `shared` is
+an address more than one guest checked in from. Neither is wrong on its own — people
+step out for air, and a whole table shares one hotspot — but a code that leaked looks
+like several guests on one address who never passed the desk.
+
 ## Passkeys
 
 `PASSKEY_RP_ID` must match the hostname in the browser's address bar — no scheme, no
@@ -234,6 +240,8 @@ are two columns on `user`, both declared in `src/lib/server/auth.ts` as
 
 Deliberately absent:
 
+- No summary or attendance table — the log page derives its counts from `check_in` on
+  each load, and a stored total can only drift from the rows it claims to count.
 - No pending-user or invite table — a seeded row goes straight into `user`, so the
   `UNIQUE` constraint on email is the dedupe and passkeys can reference `user.id` at once.
 - No claim-token table — the QR code is derived from the clock (see above).
