@@ -4,7 +4,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { auth, mintSession } from './auth';
 import { db } from './db';
-import { session, user, verification } from './db/schema';
+import { checkIn, session, user, verification } from './db/schema';
 
 const GUEST = 'guest@example.com';
 const ADMIN = 'ops@example.com';
@@ -114,4 +114,23 @@ test('the seeded admin signs in with their password and is an admin', async () =
 
 	const [row] = await db.select().from(user).where(eq(user.email, ADMIN));
 	expect(row.role).toBe('admin');
+});
+
+test('one scan checks a guest in once, a later scan checks them in again', async () => {
+	const [guest] = await db.select().from(user).where(eq(user.email, GUEST));
+
+	const arrive = (scanId: string) =>
+		db
+			.insert(checkIn)
+			.values({ userId: guest.id, method: 'passkey', scanId, ipAddress: '10.0.0.1' })
+			.onConflictDoNothing();
+
+	await arrive('scan-one');
+	// Double submit riding the same scan: dropped by the unique index.
+	await arrive('scan-one');
+	expect(await db.$count(checkIn, eq(checkIn.userId, guest.id))).toBe(1);
+
+	// Stepping out and back in is a fresh scan, and a row of its own.
+	await arrive('scan-two');
+	expect(await db.$count(checkIn, eq(checkIn.userId, guest.id))).toBe(2);
 });

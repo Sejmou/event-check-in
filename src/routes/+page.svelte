@@ -10,7 +10,16 @@
 
 <main class="mx-auto flex min-h-svh max-w-sm flex-col justify-center gap-6 p-6">
 	<h1 class="text-2xl font-semibold">Hi, {data.user.firstName}!</h1>
-	<p class="text-gray-600">You're checked in.</p>
+	{#if data.lastCheckIn}
+		<p class="text-gray-600">
+			Checked in at {new Date(data.lastCheckIn.at).toLocaleTimeString(undefined, {
+				hour: '2-digit',
+				minute: '2-digit'
+			})}.
+		</p>
+	{:else}
+		<p class="text-gray-600">Your account is ready. Scan the code at the door to check in.</p>
+	{/if}
 
 	{#if data.user.role === 'admin'}
 		<a href={resolve('/admin')} class="text-blue-600 underline">Open the check-in desk</a>

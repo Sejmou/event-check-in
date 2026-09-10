@@ -51,8 +51,9 @@ Read from `.env` via `env_file`, and by `pnpm dev` outside Docker:
 | -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                              |
 | `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, and passkeys need HTTPS |
-| `BETTER_AUTH_SECRET` | yes      | Also signs the claim tokens. Changing it invalidates outstanding QR links                                                                             |
+| `BETTER_AUTH_SECRET` | yes      | Also signs the QR and presence tokens. Changing it invalidates outstanding QR links                                                                   |
 | `PASSKEY_RP_ID`      | yes      | Hostname only, no scheme or port. Changing it invalidates registered passkeys                                                                         |
+| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                              |
 | `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                     |
 
 Behind a reverse proxy, `ORIGIN` is the public HTTPS URL and `PASSKEY_RP_ID` its
@@ -74,17 +75,19 @@ There is no sign-up. Accounts are seeded ahead of time and claimed in person.
    asked to set a password instead.
 5. That's the account claimed. The guest signs in at `/login` from then on.
 
+Claiming an account is not checking in — see [Checking in](#checking-in).
+
 `data/attendees.json` (the `/data` dir is gitignored):
 
 ```json
 [{ "email": "alice@corp.com", "firstName": "Alice", "lastName": "Ng" }]
 ```
 
-### What the QR code actually proves
+### What the QR codes actually prove
 
-The code is an HMAC of the current 30-second time bucket — derived from the clock, not
-stored anywhere. The claim route recomputes it and accepts the current bucket and the
-previous one, so a scan that crosses a rotation still works.
+A code is an HMAC of its purpose and the current 30-second time bucket — derived from
+the clock, not stored anywhere. The route recomputes it and accepts the current bucket
+and the previous one, so a scan that crosses a rotation still works.
 
 It is deliberately **multi-use**: everyone who scans the code during its window can
 claim, which is the point of leaving it on screen. What it proves is that the scanner
@@ -100,6 +103,44 @@ Two things follow from this, both deliberate:
 - **Anyone who scans could try other people's addresses.** Unknown, already-claimed and
   not-on-the-list all return the same message, and the form is rate-limited per
   presence cookie, so it leaks nothing and probing is slow.
+
+### Why the claim code and the check-in code are separate
+
+They could be one code on one route that branches on whether the account is claimed.
+They are not, because the two gate very different things:
+
+|                  | `/claim`              | `/checkin`                                 |
+| ---------------- | --------------------- | ------------------------------------------ |
+| Who can use it   | anyone holding a scan | only someone with the account's credential |
+| What it grants   | the account itself    | a row in `check_in`                        |
+| Where it belongs | the staffed desk      | any door, all evening                      |
+
+Merging them would attach the account-claiming surface to every screen showing the
+check-in code — and the check-in screen is exactly the one you want unattended at a
+second entrance, up for hours, in the background of people's photos. Keeping them apart
+also means a leaked code rotates one capability rather than both.
+
+The separation is in the HMAC itself (`claim:<bucket>` vs `checkin:<bucket>`), not in a
+check somewhere, so a code shown at the door is simply not a valid claim code —
+`src/lib/server/scan-token.spec.ts` pins that down. The cost is one `purpose` argument.
+
+## Checking in
+
+1. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
+   Like the claim code it rotates every 30 seconds and stays up indefinitely.
+2. A guest scans it and lands on `/checkin`, which gets the same signed presence cookie
+   the claim flow uses.
+3. They confirm it is them — a passkey if they have one, otherwise email and password.
+   A session alone is not enough: the credential is checked again on the spot, so a
+   borrowed unlocked phone can't check somebody in.
+4. A row goes into `check_in`.
+
+Re-entry is normal, so a guest may have several rows. A double submit is not: the
+unique index on `(user_id, scan_id)` collapses everything riding one scan into one row,
+while a later scan gets a row of its own.
+
+Guests who scan the check-in code before claiming are sent to `/claim` — there is no
+credential for them to confirm with yet.
 
 ## Passkeys
 
@@ -196,9 +237,26 @@ Deliberately absent:
 - No pending-user or invite table — a seeded row goes straight into `user`, so the
   `UNIQUE` constraint on email is the dedupe and passkeys can reference `user.id` at once.
 - No claim-token table — the QR code is derived from the clock (see above).
-- No `auth_method` column — a `passkey` row or a `credential` `account` row already says
-  which one somebody used, and a copy of that can only drift.
+- No `auth_method` column on `user` — a `passkey` row or a `credential` `account` row
+  already says what somebody has, and a copy of that can only drift. `check_in.method`
+  is a different thing: what was verified at one moment, which is history and cannot
+  drift.
 - No "has the admin added a passkey" column — that is the `passkey` table.
+
+### `check_in`
+
+The one table that is ours. One row per check-in:
+
+| Column                     | Why it's there                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `user_id`, `checked_in_at` | who and when                                                                                                               |
+| `method`                   | `passkey` or `password`, as verified server-side at that moment                                                            |
+| `ip_address`, `user_agent` | a code photographed and passed around shows up as check-ins from addresses that aren't the venue's                         |
+| `scan_id`                  | a non-secret handle for one scan; one device working through borrowed accounts shows up as one `scan_id` across many users |
+
+`ip_address` comes from `event.getClientAddress()`. Behind a reverse proxy that is the
+proxy unless adapter-node is told otherwise — set `ADDRESS_HEADER=x-forwarded-for` (and
+`XFF_DEPTH`) or the column records one address for the whole event.
 
 Passwords (the admin's, and the guest fallback) go in better-auth's `account` table as
 `provider_id = 'credential'`. Passkeys go in the `passkey` table from
