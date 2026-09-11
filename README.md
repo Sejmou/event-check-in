@@ -74,6 +74,16 @@ volume survives, and the next `up` finds the same database.
 compose profile, so `docker compose up` never starts it. `db:seed` prompts for the
 admin password, which is why it is `run` and not a startup step.
 
+It runs as `node`, the same user the app runs as. Left as root it would create an
+`app.db` the app can read but not write, and the only symptom is "Something went
+wrong. Try again." on sign-in. On a volume created before that was fixed, repair the
+ownership once:
+
+```sh
+docker compose run --rm --user root tools chown -R node:node /data
+docker compose restart app
+```
+
 ### Environment
 
 Read from `.env` via `env_file`, and by `pnpm dev` outside Docker:
