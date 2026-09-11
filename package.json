@@ -19,6 +19,7 @@
 		"test:e2e": "playwright install && playwright test",
 		"db:push": "drizzle-kit push",
 		"db:seed": "node scripts/run.js scripts/seed.ts",
+		"db:backup": "node --env-file-if-exists=.env scripts/backup.js",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",

@@ -37,6 +37,30 @@ The app listens on port 3000 in the container, published on 3000. The SQLite fil
 lives on the `db` volume, so compose overrides `DATABASE_URL` to `/data/app.db` for
 both services — the value in `.env` only applies outside Docker.
 
+### Backups
+
+`pnpm db:backup [dest]` snapshots the database through SQLite's `VACUUM INTO`, which
+is consistent while the app is writing — a plain `cp` of a live database is not. It
+refuses to write over an existing file. Without `dest` it writes next to the database
+(`local.db.2026-09-11.bak`), which under Docker means the volume, where
+`docker compose cp` can reach it:
+
+```sh
+docker compose run --rm tools pnpm db:backup
+docker compose cp app:/data/app.db.2026-09-11.bak ./
+```
+
+Restoring is the reverse, with the app stopped so nothing holds the file open:
+
+```sh
+docker compose stop app
+docker compose cp ./app.db.2026-09-11.bak app:/data/app.db
+docker compose start app
+```
+
+`docker compose down -v` deletes the `db` volume and everything in it. Without `-v` the
+volume survives, and the next `up` finds the same database.
+
 `tools` is the same image built one stage earlier, where the dev dependencies
 (drizzle-kit, the Vite loader `pnpm db:seed` runs on) still exist. It is behind a
 compose profile, so `docker compose up` never starts it. `db:seed` prompts for the
@@ -174,6 +198,7 @@ so the UI always keeps a manual way over to the password form.
 | `pnpm test:unit` / `pnpm test:e2e` / `pnpm test` | Vitest / Playwright / both                                                |
 | `pnpm auth:schema`                               | Regenerate `src/lib/server/db/auth.schema.ts` from the better-auth config |
 | `pnpm db:push`                                   | Apply the schema straight to the DB (no migration files)                  |
+| `pnpm db:backup`                                 | Snapshot the DB with `VACUUM INTO` (see [Backups](#backups))              |
 | `pnpm db:seed`                                   | Seed the initial admin and the guest list                                 |
 | `pnpm db:generate` / `pnpm db:migrate`           | Generate / apply migration files                                          |
 | `pnpm db:studio`                                 | Drizzle Studio                                                            |
