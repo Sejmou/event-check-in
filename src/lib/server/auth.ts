@@ -1,3 +1,4 @@
+import { building } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import { betterAuth } from 'better-auth/minimal';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
@@ -20,7 +21,9 @@ const pendingTokens = new Map<string, string>();
 
 export const auth = betterAuth({
 	baseURL: env.ORIGIN,
-	secret: env.BETTER_AUTH_SECRET,
+	// Placeholder while `vite build` analyses the routes with no env set —
+	// better-auth throws on a missing secret. See $lib/server/db.
+	secret: building ? 'build-time-placeholder' : env.BETTER_AUTH_SECRET,
 	database: drizzleAdapter(db, { provider: 'sqlite' }),
 	// Sign-in stays on for the admin password and the guest password fallback.
 	// disableSignUp closes /sign-up/email AND auth.api.signUpEmail — accounts only
