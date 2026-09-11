@@ -50,13 +50,21 @@ docker compose run --rm tools pnpm db:backup
 docker compose cp app:/data/app.db.2026-09-11.bak ./
 ```
 
-Restoring is the reverse, with the app stopped so nothing holds the file open:
+`pnpm db:restore <backup>` puts one back. Stop the app first — restoring under a
+running process leaves it holding a file that no longer exists:
 
 ```sh
 docker compose stop app
-docker compose cp ./app.db.2026-09-11.bak app:/data/app.db
+docker compose cp ./app.db.2026-09-11.bak app:/data/restore-me.bak
+docker compose run --rm tools pnpm db:restore /data/restore-me.bak
 docker compose start app
 ```
+
+The backup is checked (`pragma integrity_check`) before anything is overwritten, so a
+truncated or unreadable file fails while the database it would have replaced is still
+in place. The database being replaced is moved aside as
+`<db>.<timestamp>.pre-restore.bak` rather than deleted, so restoring the wrong file
+costs nothing but the confusion.
 
 `docker compose down -v` deletes the `db` volume and everything in it. Without `-v` the
 volume survives, and the next `up` finds the same database.
@@ -198,7 +206,7 @@ so the UI always keeps a manual way over to the password form.
 | `pnpm test:unit` / `pnpm test:e2e` / `pnpm test` | Vitest / Playwright / both                                                |
 | `pnpm auth:schema`                               | Regenerate `src/lib/server/db/auth.schema.ts` from the better-auth config |
 | `pnpm db:push`                                   | Apply the schema straight to the DB (no migration files)                  |
-| `pnpm db:backup`                                 | Snapshot the DB with `VACUUM INTO` (see [Backups](#backups))              |
+| `pnpm db:backup` / `pnpm db:restore`             | Snapshot the DB, and put a snapshot back (see [Backups](#backups))        |
 | `pnpm db:seed`                                   | Seed the initial admin and the guest list                                 |
 | `pnpm db:generate` / `pnpm db:migrate`           | Generate / apply migration files                                          |
 | `pnpm db:studio`                                 | Drizzle Studio                                                            |

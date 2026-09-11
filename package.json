@@ -20,6 +20,7 @@
 		"db:push": "drizzle-kit push",
 		"db:seed": "node scripts/run.js scripts/seed.ts",
 		"db:backup": "node --env-file-if-exists=.env scripts/backup.js",
+		"db:restore": "node --env-file-if-exists=.env scripts/restore.js",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
