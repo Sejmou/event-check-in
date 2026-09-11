@@ -29,7 +29,7 @@ pnpm dev            # or: pnpm dev:tailscale  (needs the tailscale CLI)
 cp .env.example .env      # fill it in, as above
 docker compose build
 docker compose run --rm tools pnpm db:push
-docker compose run --rm tools pnpm db:seed --admin ops@example.com
+docker compose run --rm tools pnpm db:seed --admin ops@example.com data/attendees.json
 docker compose up -d
 ```
 
@@ -60,9 +60,10 @@ Behind a reverse proxy, `ORIGIN` is the public HTTPS URL — not the container's
 
 There is no sign-up. Accounts are seeded ahead of time and claimed in person.
 
-1. `pnpm db:seed --admin <email> [attendees.json]` creates the initial admin — it
-   prompts for their password — and seeds the guest list as **unclaimed** accounts.
-   `--admin` is required. Re-running is safe: existing emails are left alone.
+1. `pnpm db:seed --admin <email> attendees.json` seeds the guest list as **unclaimed**
+   accounts and creates the initial admin from it — it prompts for their password. Both
+   arguments are required, and `<email>` must appear in the guest list, which is where
+   the admin's name comes from. Re-running is safe: existing emails are left alone.
 2. The admin signs in at `/login` with that password, and is prompted to add a passkey
    (skippable; it asks again next sign-in until they do).
 3. At `/admin` a QR code is displayed. It **rotates every 30 seconds** — leave the page

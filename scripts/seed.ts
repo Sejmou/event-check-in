@@ -1,8 +1,9 @@
 /**
- * Seeds the initial admin (interactively) and, optionally, the guest list.
+ * Seeds the guest list and promotes one of its entries to admin (interactively).
  *
- *   pnpm db:seed --admin ops@corp.com [data/attendees.json]
+ *   pnpm db:seed --admin ops@corp.com data/attendees.json
  *
+ * The admin must appear in the guest list — their name comes from that entry.
  * Re-runnable: existing emails are left alone.
  */
 import { createInterface } from 'node:readline/promises';
@@ -18,12 +19,16 @@ const MIN_PASSWORD_LENGTH = 8;
 type Attendee = { email: string; firstName: string; lastName: string };
 
 function parseArgs(argv: string[]) {
+	const usage = 'pnpm db:seed --admin ops@corp.com data/attendees.json';
 	const flag = argv.indexOf('--admin');
 	if (flag === -1 || !argv[flag + 1]) {
-		throw new Error('--admin <email> is required, e.g. pnpm db:seed --admin ops@corp.com');
+		throw new Error(`--admin <email> is required, e.g. ${usage}`);
 	}
 	const adminEmail = argv[flag + 1];
 	const attendeesFile = argv.filter((_, i) => i !== flag && i !== flag + 1)[0];
+	if (!attendeesFile) {
+		throw new Error(`a guest list file is required, e.g. ${usage}`);
+	}
 	return { adminEmail, attendeesFile };
 }
 
@@ -80,18 +85,7 @@ async function readAdminPassword() {
 	}
 }
 
-function splitName(email: string) {
-	const [local] = email.split('@');
-	const [first, ...rest] = local.split(/[._-]+/).filter(Boolean);
-	return {
-		firstName: capitalize(first ?? 'Admin'),
-		lastName: rest.length ? rest.map(capitalize).join(' ') : 'Admin'
-	};
-}
-
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-async function seedAdmin(email: string) {
+async function seedAdmin({ email, firstName, lastName }: Attendee) {
 	const ctx = await auth.$context;
 
 	if (await ctx.internalAdapter.findUserByEmail(email)) {
@@ -100,7 +94,6 @@ async function seedAdmin(email: string) {
 	}
 
 	const password = await readAdminPassword();
-	const { firstName, lastName } = splitName(email);
 
 	const created = await ctx.internalAdapter.createUser(
 		{
@@ -127,30 +120,37 @@ async function seedAdmin(email: string) {
 	console.log(`Created admin ${email}.`);
 }
 
-async function seedAttendees(file: string) {
+async function readAttendees(file: string): Promise<Attendee[]> {
 	const attendees: Attendee[] = JSON.parse(await readFile(file, 'utf8'));
 
-	const rows = attendees.map(({ email, firstName, lastName }) => {
+	return attendees.map(({ email, firstName, lastName }) => {
 		if (!email || !firstName || !lastName) {
 			throw new Error(
 				`every attendee needs email, firstName and lastName: ${JSON.stringify({ email, firstName, lastName })}`
 			);
 		}
-		return {
-			id: crypto.randomUUID(),
-			email,
-			name: `${firstName} ${lastName}`,
-			firstName,
-			lastName,
-			role: 'attendee',
-			emailVerified: false,
-			claimedAt: null
-		};
+		// better-auth lower-cases the addresses it writes, and the unique index is
+		// case-sensitive — an unnormalized list seeds a second row for the same person.
+		return { email: email.trim().toLowerCase(), firstName, lastName };
 	});
+}
+
+async function seedAttendees(attendees: Attendee[], file: string) {
+	const rows = attendees.map(({ email, firstName, lastName }) => ({
+		id: crypto.randomUUID(),
+		email,
+		name: `${firstName} ${lastName}`,
+		firstName,
+		lastName,
+		role: 'attendee',
+		emailVerified: false,
+		claimedAt: null
+	}));
 
 	if (!rows.length) return console.log(`${file} is empty — nothing to seed.`);
 
-	// The UNIQUE constraint on email is the dedupe; re-running is a no-op.
+	// The UNIQUE constraint on email is the dedupe; re-running is a no-op, and the
+	// admin — already inserted above with their role — is skipped the same way.
 	await db.insert(user).values(rows).onConflictDoNothing({ target: user.email });
 
 	const seeded = await db.$count(user, eq(user.role, 'attendee'));
@@ -158,5 +158,14 @@ async function seedAttendees(file: string) {
 }
 
 const { adminEmail, attendeesFile } = parseArgs(process.argv.slice(2));
-await seedAdmin(adminEmail);
-if (attendeesFile) await seedAttendees(attendeesFile);
+const attendees = await readAttendees(attendeesFile);
+
+const admin = attendees.find((a) => a.email === adminEmail.trim().toLowerCase());
+if (!admin) {
+	throw new Error(
+		`${adminEmail} is not in ${attendeesFile} — the admin must be on the guest list.`
+	);
+}
+
+await seedAdmin(admin);
+await seedAttendees(attendees, attendeesFile);
