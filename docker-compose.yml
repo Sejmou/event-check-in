@@ -20,6 +20,10 @@ services:
       target: build
     profiles:
       - tools
+    # Same uid as the runtime image's `node`, or every file these commands create
+    # on the volume belongs to root and the app — which does not run as root —
+    # can read the database but not write to it.
+    user: node
     env_file: .env
     environment:
       DATABASE_URL: /data/app.db

@@ -79,6 +79,10 @@ export const actions: Actions = {
 			signedIn = await auth.api.signInEmail({ body: { email, password } });
 		} catch (error) {
 			if (error instanceof APIError) return fail(400, { message: NO_MATCH });
+			// Whatever reaches here is not a rejected credential — a locked or
+			// read-only database, say. Nobody can act on "something went wrong"
+			// without it in the log.
+			console.error('sign-in failed:', error);
 			return fail(500, { message: 'Something went wrong. Try again.' });
 		}
 
