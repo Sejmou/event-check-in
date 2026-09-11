@@ -31,3 +31,8 @@ project.inlang/cache/
 
 # data files (incl. those used for seeding DB)
 /data
+
+# Git worktrees
+/worktrees/
+/.claude/worktrees/
+/.agents/worktrees/
