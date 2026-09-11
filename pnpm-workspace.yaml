@@ -1,5 +1,6 @@
 allowBuilds:
-  better-sqlite3: true
+  # Prebuilt .node binaries ship in the tarball; node-gyp would need a C toolchain.
+  better-sqlite3: false
   esbuild: true
 minimumReleaseAgeExclude:
   - '@better-auth/core@1.7.4'
