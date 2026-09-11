@@ -48,7 +48,10 @@ export const actions: Actions = {
 		if (!verifyPresence('claim', presence)) return fail(403, { message: NO_PRESENCE });
 		if (tooManyAttempts(presence!, MAX_ATTEMPTS)) return fail(429, { message: NO_MATCH });
 
-		const email = (await event.request.formData()).get('email')?.toString().trim() ?? '';
+		// Lower-cased to match the seeded rows and what better-auth writes; the
+		// unique index on email is case-sensitive.
+		const email =
+			(await event.request.formData()).get('email')?.toString().trim().toLowerCase() ?? '';
 
 		const [match] = await db
 			.select({ id: user.id })
