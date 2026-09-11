@@ -14,7 +14,6 @@ Fill in `.env`:
 - `DATABASE_URL` — SQLite file path, e.g. `local.db`
 - `ORIGIN` — public base URL, e.g. `http://localhost:5173`
 - `BETTER_AUTH_SECRET` — `openssl rand -base64 32`
-- `PASSKEY_RP_ID` — hostname only, e.g. `localhost` (see [Passkeys](#passkeys))
 
 Create the tables, then seed an admin and the guest list:
 
@@ -47,17 +46,15 @@ admin password, which is why it is `run` and not a startup step.
 
 Read from `.env` via `env_file`, and by `pnpm dev` outside Docker:
 
-| Variable             | Required | Notes                                                                                                                                                 |
-| -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                              |
-| `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, and passkeys need HTTPS |
-| `BETTER_AUTH_SECRET` | yes      | Also signs the QR and presence tokens. Changing it invalidates outstanding QR links                                                                   |
-| `PASSKEY_RP_ID`      | yes      | Hostname only, no scheme or port. Changing it invalidates registered passkeys                                                                         |
-| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                              |
-| `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                     |
+| Variable             | Required | Notes                                                                                                                                                                                                                        |
+| -------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                     |
+| `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, passkeys need HTTPS, and its hostname is the passkey relying party (see [Passkeys](#passkeys)) |
+| `BETTER_AUTH_SECRET` | yes      | Also signs the QR and presence tokens. Changing it invalidates outstanding QR links                                                                                                                                          |
+| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                     |
+| `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                            |
 
-Behind a reverse proxy, `ORIGIN` is the public HTTPS URL and `PASSKEY_RP_ID` its
-hostname — not the container's.
+Behind a reverse proxy, `ORIGIN` is the public HTTPS URL — not the container's.
 
 ## How people get accounts
 
@@ -150,8 +147,10 @@ like several guests on one address who never passed the desk.
 
 ## Passkeys
 
-`PASSKEY_RP_ID` must match the hostname in the browser's address bar — no scheme, no
-port. Changing it later invalidates every passkey already registered, so settle it
+The relying party ID is `ORIGIN`'s hostname. It is not configured separately: WebAuthn
+requires it to match the hostname in the browser's address bar, and the passkey plugin
+already defaults it to `baseURL`'s hostname, so a second setting could only ever drift.
+Changing `ORIGIN`'s hostname invalidates every passkey already registered, so settle it
 before the event.
 
 WebAuthn also needs a **secure context**: HTTPS, or `localhost` exactly. Guests scan on

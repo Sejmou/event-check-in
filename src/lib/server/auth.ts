@@ -56,7 +56,9 @@ export const auth = betterAuth({
 			}
 		}),
 		passkey({
-			rpID: env.PASSKEY_RP_ID || 'localhost',
+			// No rpID: the plugin defaults it to baseURL's hostname, which is what
+			// WebAuthn requires it to be anyway. A separate setting could only ever
+			// drift away from ORIGIN and silently void every registered passkey.
 			rpName: 'Event Check-in',
 			origin: env.ORIGIN
 		}),
