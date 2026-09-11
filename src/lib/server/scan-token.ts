@@ -21,7 +21,12 @@ export const BUCKET_MS = 30_000;
 const PRESENCE_MS = 10 * 60_000;
 
 function hmac(message: string) {
-	return createHmac('sha256', env.BETTER_AUTH_SECRET).update(message).digest('base64url');
+	// better-auth refuses to start without it, so this only fires if that ever
+	// stops being true — signing a QR token with nothing is not a fallback.
+	const secret = env.BETTER_AUTH_SECRET;
+	if (!secret) throw new Error('BETTER_AUTH_SECRET is not set');
+
+	return createHmac('sha256', secret).update(message).digest('base64url');
 }
 
 function equals(a: string, b: string) {
