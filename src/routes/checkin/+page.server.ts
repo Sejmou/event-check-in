@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { auth } from '$lib/server/auth';
 import { publishCheckIn } from '$lib/server/check-in-events';
+import { checkInHost } from '$lib/server/check-in-host';
 import { db } from '$lib/server/db';
 import { checkIn, passkey, user } from '$lib/server/db/schema';
 import {
@@ -25,13 +26,14 @@ const NO_TICKET =
 
 export const load: PageServerLoad = async (event) => {
 	const token = event.url.searchParams.get('t');
-	if (token && verifyBucketToken(token)) {
-		event.cookies.set(PRESENCE_COOKIE, issuePresence(), presenceCookieOptions);
+	const hostId = token && verifyBucketToken(token);
+	if (hostId) {
+		event.cookies.set(PRESENCE_COOKIE, issuePresence(hostId), presenceCookieOptions);
 		redirect(302, '/checkin');
 	}
 
 	return {
-		present: verifyPresence(event.cookies.get(PRESENCE_COOKIE)),
+		present: verifyPresence(event.cookies.get(PRESENCE_COOKIE)) !== null,
 		// Only whether there is one — the page submits it straight back.
 		hasTicket: verifyTicket(event.cookies.get(TICKET_COOKIE)) !== null
 	};
@@ -41,14 +43,15 @@ export const actions: Actions = {
 	/** A ticket from `/setup`, which this device picked up in the last 30 seconds. */
 	withTicket: async (event) => {
 		const presence = event.cookies.get(PRESENCE_COOKIE);
-		if (!verifyPresence(presence)) return fail(403, { message: NO_PRESENCE });
+		const hostId = verifyPresence(presence);
+		if (!hostId) return fail(403, { message: NO_PRESENCE });
 
 		const userId = verifyTicket(event.cookies.get(TICKET_COOKIE));
 		if (!userId) return fail(403, { message: NO_TICKET });
 		// One ticket, one check-in.
 		event.cookies.delete(TICKET_COOKIE, ticketCookieOptions);
 
-		return record(event, userId, 'link', presence!);
+		return record(event, userId, 'link', presence!, hostId);
 	},
 
 	/**
@@ -59,7 +62,8 @@ export const actions: Actions = {
 	 */
 	withPasskey: async (event) => {
 		const presence = event.cookies.get(PRESENCE_COOKIE);
-		if (!verifyPresence(presence)) return fail(403, { message: NO_PRESENCE });
+		const hostId = verifyPresence(presence);
+		if (!hostId) return fail(403, { message: NO_PRESENCE });
 
 		const { user: current, session } = event.locals;
 		if (!current || !session) return fail(403, { message: NOT_FRESH });
@@ -78,7 +82,7 @@ export const actions: Actions = {
 			return fail(403, { message: NOT_FRESH });
 		}
 
-		return record(event, current.id, 'passkey', presence!);
+		return record(event, current.id, 'passkey', presence!, hostId);
 	}
 };
 
@@ -86,7 +90,8 @@ async function record(
 	event: RequestEvent,
 	userId: string,
 	method: 'passkey' | 'link',
-	presence: string
+	presence: string,
+	hostId: string
 ) {
 	const [guest] = await db
 		.select({ firstName: user.firstName, lastName: user.lastName })
@@ -111,7 +116,11 @@ async function record(
 		.onConflictDoNothing()
 		.returning({ id: checkIn.id, at: checkIn.checkedInAt });
 
-	if (row) publishCheckIn({ ...guest, id: row.id, at: row.at.getTime() });
+	if (row) {
+		publishCheckIn({ ...guest, id: row.id, at: row.at.getTime() });
+		const host = checkInHost(hostId, scanId(presence));
+		if (host) publishCheckIn(host);
+	}
 
 	return { checkedIn: guest.firstName };
 }

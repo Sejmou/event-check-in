@@ -1,13 +1,13 @@
 import { error } from '@sveltejs/kit';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { user } from '$lib/server/db/schema';
 import { issueTicket, TICKET_COOKIE, TICKET_MS, ticketCookieOptions } from '$lib/server/scan-token';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 /**
- * The guest this link belongs to. Attendees only: an admin's address here would
- * let anyone who knows it check the admin in.
+ * The guest this link belongs to. Admins included: they are on the guest list
+ * too, and a ticket only checks them in — it doesn't sign anyone in.
  */
 async function guestFromLink(event: RequestEvent) {
 	// Lower-cased to match the seeded rows; the unique index on email is case-sensitive.
@@ -17,7 +17,7 @@ async function guestFromLink(event: RequestEvent) {
 	const [guest] = await db
 		.select({ id: user.id, email: user.email, firstName: user.firstName })
 		.from(user)
-		.where(and(eq(user.email, email), eq(user.role, 'attendee')))
+		.where(eq(user.email, email))
 		.limit(1);
 	return guest ?? null;
 }

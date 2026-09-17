@@ -60,7 +60,14 @@
 								{row.lastName}
 								<span class="block text-xs text-gray-500">{row.email}</span>
 							</td>
-							<td class="py-2 pr-4">{row.method}</td>
+							<td
+								class="py-2 pr-4"
+								title={row.method === 'host'
+									? 'Checked in automatically: a guest got in through the check-in code this admin was showing'
+									: undefined}
+							>
+								{row.method}
+							</td>
 							<td class="py-2 pr-4 whitespace-nowrap">
 								{row.ipAddress ?? '—'}
 								{#if row.sharedAddress}
