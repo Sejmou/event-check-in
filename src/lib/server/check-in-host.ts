@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { checkIn, user } from '$lib/server/db/schema';
+import { hasAdminRole } from '$lib/server/roles';
 
 /**
  * Checks in the admin showing the code, once a guest has got in through it —
@@ -23,7 +24,7 @@ export function checkInHost(hostId: string, scan: string) {
 			.select({ firstName: user.firstName, lastName: user.lastName })
 			.from(user)
 			// A code shown by someone since demoted, or deleted, names nobody to check in.
-			.where(and(eq(user.id, hostId), eq(user.role, 'admin')))
+			.where(and(eq(user.id, hostId), hasAdminRole()))
 			.get();
 		if (!host) return null;
 

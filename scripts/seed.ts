@@ -1,20 +1,22 @@
 /**
- * Seeds the guest list and promotes one of its entries to admin (interactively).
+ * Seeds the guest list and makes one of its entries the superadmin (interactively):
+ * an admin who can also promote other guests to admin on /admin.
  *
  *   pnpm db:seed --admin ops@corp.com data/attendees.json
  *
- * The admin must appear in the guest list — their name comes from that entry.
- * Re-runnable: existing emails are left alone.
+ * The superadmin must appear in the guest list — their name comes from that entry.
+ * Re-runnable: existing emails are left alone. One exception, for databases seeded
+ * before superadmins existed: while there is no superadmin, an existing admin
+ * given as --admin becomes it.
  */
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { readFile } from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
+import { MIN_PASSWORD_LENGTH } from '../src/lib/server/admins';
 import { auth } from '../src/lib/server/auth';
 import { db } from '../src/lib/server/db';
 import { user } from '../src/lib/server/db/schema';
-
-const MIN_PASSWORD_LENGTH = 8;
 
 type Attendee = { email: string; firstName: string; lastName: string };
 
@@ -69,7 +71,7 @@ async function readAdminPassword() {
 
 	try {
 		for (;;) {
-			const password = await ask('Admin password: ');
+			const password = await ask('Superadmin password: ');
 			if (password.length < MIN_PASSWORD_LENGTH) {
 				console.error(`  Too short — at least ${MIN_PASSWORD_LENGTH} characters.`);
 				continue;
@@ -85,11 +87,21 @@ async function readAdminPassword() {
 	}
 }
 
-async function seedAdmin({ email, firstName, lastName }: Attendee) {
+async function seedSuperadmin({ email, firstName, lastName }: Attendee) {
 	const ctx = await auth.$context;
 
-	if (await ctx.internalAdapter.findUserByEmail(email)) {
-		console.log(`Admin ${email} already exists — leaving it alone.`);
+	const [existing] = await db
+		.select({ id: user.id, role: user.role })
+		.from(user)
+		.where(eq(user.email, email));
+	if (existing) {
+		const noSuperadmin = (await db.$count(user, eq(user.role, 'superadmin'))) === 0;
+		if (existing.role === 'admin' && noSuperadmin) {
+			await db.update(user).set({ role: 'superadmin' }).where(eq(user.id, existing.id));
+			console.log(`Admin ${email} already exists — made them superadmin.`);
+		} else {
+			console.log(`${email} already exists — leaving it alone.`);
+		}
 		return;
 	}
 
@@ -101,7 +113,7 @@ async function seedAdmin({ email, firstName, lastName }: Attendee) {
 			name: `${firstName} ${lastName}`,
 			firstName,
 			lastName,
-			role: 'admin',
+			role: 'superadmin',
 			// Verified out of band by whoever is running this.
 			emailVerified: true
 		},
@@ -115,7 +127,7 @@ async function seedAdmin({ email, firstName, lastName }: Attendee) {
 		password: await ctx.password.hash(password)
 	});
 
-	console.log(`Created admin ${email}.`);
+	console.log(`Created superadmin ${email}.`);
 }
 
 async function readAttendees(file: string): Promise<Attendee[]> {
@@ -147,7 +159,7 @@ async function seedAttendees(attendees: Attendee[], file: string) {
 	if (!rows.length) return console.log(`${file} is empty — nothing to seed.`);
 
 	// The UNIQUE constraint on email is the dedupe; re-running is a no-op, and the
-	// admin — already inserted above with their role — is skipped the same way.
+	// superadmin — already inserted above with their role — is skipped the same way.
 	await db.insert(user).values(rows).onConflictDoNothing({ target: user.email });
 
 	const seeded = await db.$count(user, eq(user.role, 'attendee'));
@@ -157,12 +169,12 @@ async function seedAttendees(attendees: Attendee[], file: string) {
 const { adminEmail, attendeesFile } = parseArgs(process.argv.slice(2));
 const attendees = await readAttendees(attendeesFile);
 
-const admin = attendees.find((a) => a.email === adminEmail.trim().toLowerCase());
-if (!admin) {
+const superadmin = attendees.find((a) => a.email === adminEmail.trim().toLowerCase());
+if (!superadmin) {
 	throw new Error(
-		`${adminEmail} is not in ${attendeesFile} — the admin must be on the guest list.`
+		`${adminEmail} is not in ${attendeesFile} — the superadmin must be on the guest list.`
 	);
 }
 
-await seedAdmin(admin);
+await seedSuperadmin(superadmin);
 await seedAttendees(attendees, attendeesFile);
