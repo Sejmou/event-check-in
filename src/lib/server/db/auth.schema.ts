@@ -18,7 +18,6 @@ export const user = sqliteTable("user", {
     .notNull(),
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
-  claimedAt: integer("claimed_at", { mode: "timestamp_ms" }),
   role: text("role").default("attendee"),
 });
 

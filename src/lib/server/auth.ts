@@ -13,7 +13,7 @@ import { db } from '$lib/server/db';
  * returns `{ status: true }`, so the token comes back through `sendMagicLink`.
  * The caller drains it immediately after the await — see `mintSession`.
  *
- * ponytail: last-write-wins if two claims for the SAME email overlap. Both
+ * ponytail: last-write-wins if two passkey setups for the SAME email overlap. Both
  * tokens stay valid rows, so the loser just retries. Swap for AsyncLocalStorage
  * if that ever shows up in practice.
  */
@@ -25,7 +25,7 @@ export const auth = betterAuth({
 	// better-auth throws on a missing secret. See $lib/server/db.
 	secret: building ? 'build-time-placeholder' : env.BETTER_AUTH_SECRET,
 	database: drizzleAdapter(db, { provider: 'sqlite' }),
-	// Sign-in stays on for the admin password and the guest password fallback.
+	// Sign-in stays on for the admin password; guests never get one.
 	// disableSignUp closes /sign-up/email AND auth.api.signUpEmail — accounts only
 	// come from the seed script.
 	emailAndPassword: { enabled: true, disableSignUp: true },
@@ -39,8 +39,6 @@ export const auth = betterAuth({
 			// better-auth hardcodes `name` on the user model and can't drop it.
 			// Demoted to a nullable derived column; callers set it from the two above.
 			name: { type: 'string', required: false, input: false },
-			// null = unclaimed. The whole "inactive account" concept.
-			claimedAt: { type: 'date', required: false, input: false },
 			role: { type: 'string', required: false, input: false, defaultValue: 'attendee' }
 		}
 	},
@@ -67,11 +65,13 @@ export const auth = betterAuth({
 });
 
 /**
- * Signs `email` in without a credential, so an unclaimed guest has a session to
- * register a passkey or set a password against. Both of those sit behind
- * sessionMiddleware, hence the chicken-and-egg this solves.
+ * Signs `email` in without a credential, so a guest has a session to register a
+ * passkey against. That endpoint sits behind sessionMiddleware, hence the
+ * chicken-and-egg this solves. Guests are signed out again as soon as the
+ * passkey is saved — the session is scaffolding, not a login.
  *
- * Caller must have already checked the guest is seeded and unclaimed.
+ * Caller must have already checked the email belongs to a guest, never an admin:
+ * this hands out a session to anyone who knows the address.
  */
 export async function mintSession(email: string, headers: Headers) {
 	await auth.api.signInMagicLink({ body: { email }, headers: new Headers() });

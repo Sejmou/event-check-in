@@ -1,21 +1,36 @@
-import { isNull } from 'drizzle-orm';
-import QRCode from 'qrcode';
+import { redirect } from '@sveltejs/kit';
+import { asc, eq } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
+import { auth } from '$lib/server/auth';
 import { db } from '$lib/server/db';
-import { user } from '$lib/server/db/schema';
-import { bucketToken, msUntilNextBucket } from '$lib/server/scan-token';
-import type { PageServerLoad } from './$types';
+import { passkey, user } from '$lib/server/db/schema';
+import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async () => {
-	const claimUrl = new URL('/claim', env.ORIGIN);
-	claimUrl.searchParams.set('t', bucketToken('claim'));
+	const guests = await db
+		.select({
+			id: user.id,
+			email: user.email,
+			firstName: user.firstName,
+			lastName: user.lastName,
+			passkeys: db.$count(passkey, eq(passkey.userId, user.id))
+		})
+		.from(user)
+		.where(eq(user.role, 'attendee'))
+		.orderBy(asc(user.lastName), asc(user.firstName));
 
-	const [qr, total, unclaimed] = await Promise.all([
-		// Rendered here rather than in the browser so the page needs no QR library.
-		QRCode.toString(claimUrl.toString(), { type: 'svg', margin: 1, width: 420 }),
-		db.$count(user),
-		db.$count(user, isNull(user.claimedAt))
-	]);
+	return {
+		guests: guests.map((guest) => {
+			const setupUrl = new URL('/setup', env.ORIGIN);
+			setupUrl.searchParams.set('email', guest.email);
+			return { ...guest, setupUrl: setupUrl.toString() };
+		})
+	};
+};
 
-	return { qr, claimed: total - unclaimed, total, msUntilNextBucket: msUntilNextBucket() };
+export const actions: Actions = {
+	signOut: async (event) => {
+		await auth.api.signOut({ headers: event.request.headers });
+		redirect(302, '/login');
+	}
 };

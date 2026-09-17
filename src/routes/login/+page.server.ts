@@ -4,7 +4,7 @@ import { auth } from '$lib/server/auth';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = (event) => {
-	if (event.locals.user) redirect(302, '/');
+	if (event.locals.user?.role === 'admin') redirect(302, '/admin');
 	return {};
 };
 
@@ -27,6 +27,6 @@ export const actions: Actions = {
 			return fail(500, { message: 'Something went wrong. Try again.' });
 		}
 
-		redirect(302, '/');
+		redirect(302, '/admin');
 	}
 };
