@@ -21,7 +21,7 @@
 			return;
 		}
 		// Through / rather than straight to /admin: it sends admins on and signs a
-		// guest's passkey back out.
+		// leftover guest passkey back out.
 		await goto(resolve('/'), { invalidateAll: true });
 	}
 </script>

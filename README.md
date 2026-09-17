@@ -89,14 +89,14 @@ docker compose restart app
 
 Read from `.env` via `env_file`, and by `pnpm dev` outside Docker:
 
-| Variable             | Required | Notes                                                                                                                                                                                                                        |
-| -------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                     |
-| `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, passkeys need HTTPS, and its hostname is the passkey relying party (see [Passkeys](#passkeys)) |
-| `BETTER_AUTH_SECRET` | yes      | Also signs the QR, presence and ticket tokens. Changing it invalidates outstanding QR links                                                                                                                                  |
-| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                     |
-| `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                            |
-| `HOST_PORT`          | no       | Host port compose publishes the app on. Defaults to 3000                                                                                                                                                                     |
+| Variable             | Required | Notes                                                                                                                                                                                                                            |
+| -------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                         |
+| `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, organizer passkeys need HTTPS, and its hostname is their relying party (see [Passkeys](#passkeys)) |
+| `BETTER_AUTH_SECRET` | yes      | Also signs the QR, presence and ticket tokens. Changing it invalidates outstanding QR links                                                                                                                                      |
+| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                         |
+| `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                                |
+| `HOST_PORT`          | no       | Host port compose publishes the app on. Defaults to 3000                                                                                                                                                                         |
 
 Behind a reverse proxy, `ORIGIN` is the public HTTPS URL — not the container's.
 
@@ -124,30 +124,23 @@ guest gets a personal link instead.
 
 ## Checking in
 
-`/setup` only opens for an email on the guest list; anything else, admins included, is a 404. There a guest picks one of two ways in:
+`/setup` only opens for an email on the guest list; anything else, admins included, is a 404. There a guest taps **Check in now**: the device gets a signed ticket cookie good
+for **30 seconds**. The guest scans the code at the door within that window, in the same
+browser, and `/checkin` redeems the ticket without asking for anything. Once used, it is
+gone. Next time they come in, they open the link again.
 
-- **Check in now.** The device gets a signed ticket cookie good for **30 seconds**. The
-  guest scans the code at the door within that window, in the same browser, and
-  `/checkin` redeems the ticket without asking for anything. Once used, it is gone.
-  Next time they come in, they open the link again.
-- **Set up a passkey.** From then on they skip `/setup`: scan the code, confirm with the
-  passkey, done.
+Guests can't set up a passkey — see [Why guests have no passkeys](#why-guests-have-no-passkeys).
+The admin can, and checks in with it: `/setup` refuses them, so `/checkin` offers
+"Organizer? Check in with your passkey" instead.
 
-Either way a row goes into `check_in`. Re-entry is normal, so a guest may have several
+Every check-in puts a row in `check_in`. Re-entry is normal, so a guest may have several
 rows. A double submit is not: the unique index on `(user_id, scan_id)` collapses
 everything riding one scan into one row, while a later scan gets a row of its own.
 
-Registering a passkey needs a better-auth session, so `/setup` mints one for the guest
-from the email alone (`mintSession`, a server-side magic link) and signs them out again
-once the passkey is saved. Checking in with a passkey signs in too, and that session is
-ended straight after the row is written. Admins stay signed in. A guest who abandons
-passkey setup halfway keeps the session until they land on `/`, which ends it, or it
-expires.
-
 ### What stops abuse
 
-Very little up front, on purpose. Anyone holding a guest's link can check that guest in,
-or register their own passkey on the account. The personal link is the invitation, and it
+Very little up front, on purpose. Anyone holding a guest's link can check that guest in.
+The personal link is the invitation, and it
 should be treated like one.
 
 What catches it is the screen at the door. Every check-in shows up there as it happens,
@@ -184,20 +177,53 @@ expiry, and has a prefix of its own, so neither token passes for the other —
 
 ## Passkeys
 
+Only the admin has one. It is offered after their first password sign-in, works on
+`/login`, and checks them in at the door. The server refuses a passkey registration for
+anyone who isn't an admin.
+
 The relying party ID is `ORIGIN`'s hostname. It is not configured separately: WebAuthn
 requires it to match the hostname in the browser's address bar, and the passkey plugin
 already defaults it to `baseURL`'s hostname, so a second setting could only ever drift.
 Changing `ORIGIN`'s hostname invalidates every passkey already registered, so settle it
 before the event.
 
-WebAuthn also needs a **secure context**: HTTPS, or `localhost` exactly. Guests scan on
-their own phones, so on plain-HTTP LAN or Tailscale testing only the "check in now"
-ticket works. The passkey path can't be tested off `localhost` without `tailscale serve`
-or a real certificate.
+WebAuthn also needs a **secure context**: HTTPS, or `localhost` exactly. The passkey
+path can't be tested off `localhost` without `tailscale serve` or a real certificate.
 
-Device support is detected with `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`.
-That check misreports on private-mode browsers and managed devices, in both directions,
-so `/setup` only warns when it says no. It never hides the passkey button.
+### Why guests have no passkeys
+
+Guests could set up a passkey on `/setup` at one point. That was removed. The goal
+was a credential that stays on the guest's phone, so a passkey couldn't be handed around
+like the link. It doesn't work for guests:
+
+- **Phone passkeys are synced.** A passkey made on an iPhone goes into iCloud Keychain,
+  and on Android into Google Password Manager. Both always sync, and so do third-party
+  managers like 1Password. There is no setting to keep one on the device only. A
+  device-bound credential on a phone in practice means a hardware security key, which
+  guests don't carry.
+- **The site can't ask for a device-bound passkey.** WebAuthn has no option to require
+  a passkey that isn't synced. The server only learns whether it is synced (the
+  backup-eligible flag) after the guest has already used their face or fingerprint, so
+  enforcing it would mean rejecting almost every guest after they had done everything
+  right.
+- **The flag can't be trusted anyway.** The authenticator reports it, and proving it
+  would take attestation, which this app doesn't collect.
+- **A synced passkey adds nothing over the link.** It can be shared with anyone on the
+  same Apple or Google account, and whoever can set one up already holds the personal
+  link, which checks the guest in on its own. It also needed extra code: a server-side
+  magic link to give guests a session to register against, and a second check-in path.
+
+So guests have one way in, the 30-second ticket, and abuse is caught by the door screen
+([What stops abuse](#what-stops-abuse)). The admin keeps a passkey: they sign in to the
+admin pages, and there a passkey replaces a password rather than a link.
+
+Guest passkeys registered before the change are still in the `passkey` table. One can
+still sign in, but it doesn't check anyone in, and `/` and `/checkin` end the session.
+To clear them:
+
+```sql
+delete from passkey where user_id in (select id from user where role = 'attendee');
+```
 
 ## Commands
 
@@ -272,8 +298,8 @@ column on `user`, declared in `src/lib/server/auth.ts` as an `additionalField` w
 
 - `role` — `attendee` or `admin`. Named `role` rather than `is_admin` so adopting
   better-auth's `admin` plugin later is a no-op instead of a migration. `/setup` refuses
-  anyone who isn't an `attendee`, because it hands out a session to whoever knows the
-  address.
+  anyone who isn't an `attendee`, because it hands a check-in ticket to whoever knows
+  the address.
 
 Deliberately absent:
 
@@ -282,10 +308,11 @@ Deliberately absent:
 - No invite or setup-token table — the link is the email itself, a seeded row goes
   straight into `user`, and the `UNIQUE` constraint on email is the dedupe.
 - No QR or ticket table — both are signed and carry their own expiry (see above).
-- No `auth_method` column on `user` — a `passkey` row already says what somebody has.
+- No `auth_method` column on `user` — guests all have the link, and an admin's `passkey`
+  row already says what they have.
   `check_in.method` is a different thing: what was used at one moment, which is history
   and cannot drift.
-- No "has this guest or admin added a passkey" column — that is the `passkey` table.
+- No "has the admin added a passkey" column — that is the `passkey` table.
 
 ### `check_in`
 
@@ -294,7 +321,7 @@ The one table that is ours. One row per check-in:
 | Column                     | Why it's there                                                                                                             |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `user_id`, `checked_in_at` | who and when                                                                                                               |
-| `method`                   | `passkey` or `link` (a ticket from `/setup`), as verified server-side at that moment                                       |
+| `method`                   | `link` (a ticket from `/setup`) or `passkey` (admins only), as verified server-side at that moment                         |
 | `ip_address`, `user_agent` | a code photographed and passed around shows up as check-ins from addresses that aren't the venue's                         |
 | `scan_id`                  | a non-secret handle for one scan; one device working through borrowed accounts shows up as one `scan_id` across many users |
 
@@ -303,5 +330,5 @@ proxy unless adapter-node is told otherwise — set `ADDRESS_HEADER=x-forwarded-
 `XFF_DEPTH`) or the column records one address for the whole event.
 
 The admin's password goes in better-auth's `account` table as
-`provider_id = 'credential'`; guests have none. Passkeys go in the `passkey` table from
+`provider_id = 'credential'`; guests have none. The admin's passkeys go in the `passkey` table from
 `@better-auth/passkey`. Both arrive via `pnpm auth:schema`.

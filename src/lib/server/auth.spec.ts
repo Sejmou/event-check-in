@@ -2,7 +2,7 @@ import { beforeAll, expect, test } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { eq } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
-import { auth, mintSession } from './auth';
+import { auth } from './auth';
 import { db } from './db';
 import { checkIn, session, user, verification } from './db/schema';
 
@@ -51,19 +51,8 @@ test('registration is closed', async () => {
 	expect(await db.$count(user, eq(user.email, 'walkup@example.com'))).toBe(0);
 });
 
-test('a seeded guest is signed in without a credential, so they can add a passkey', async () => {
-	await seedGuest();
-
-	const [guest] = await db.select().from(user).where(eq(user.email, GUEST));
-
-	// sveltekitCookies needs a real request and throws without one. The session
-	// row is written before that, and the row is what /setup relies on.
-	await mintSession(GUEST, new Headers()).catch(() => {});
-
-	expect(await db.$count(session, eq(session.userId, guest.id))).toBe(1);
-});
-
 test('a guest has no password to sign in with', async () => {
+	await seedGuest();
 	const [guest] = await db.select().from(user).where(eq(user.email, GUEST));
 	const before = await db.$count(session, eq(session.userId, guest.id));
 
@@ -116,7 +105,7 @@ test('one scan checks a guest in once, a later scan checks them in again', async
 	const arrive = (scanId: string) =>
 		db
 			.insert(checkIn)
-			.values({ userId: guest.id, method: 'passkey', scanId, ipAddress: '10.0.0.1' })
+			.values({ userId: guest.id, method: 'link', scanId, ipAddress: '10.0.0.1' })
 			.onConflictDoNothing();
 
 	await arrive('scan-one');

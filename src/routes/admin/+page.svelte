@@ -39,7 +39,6 @@
 			<thead class="border-b border-gray-300 text-gray-600">
 				<tr>
 					<th class="py-2 pr-4 font-medium">Guest</th>
-					<th class="py-2 pr-4 font-medium">Passkey</th>
 					<th class="py-2 font-medium">Personal link</th>
 				</tr>
 			</thead>
@@ -51,7 +50,6 @@
 							{guest.lastName}
 							<span class="block text-xs text-gray-500">{guest.email}</span>
 						</td>
-						<td class="py-2 pr-4">{guest.passkeys > 0 ? 'yes' : '—'}</td>
 						<td class="py-2">
 							<button
 								type="button"

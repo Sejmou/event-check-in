@@ -54,20 +54,19 @@
 			</noscript>
 		</form>
 	{:else}
-		<h1 class="text-2xl font-semibold">Confirm it's you</h1>
-		<p class="text-gray-600">Use your passkey — fingerprint, face or screen lock.</p>
+		<h1 class="text-2xl font-semibold">Open your personal link</h1>
+		<p class="text-gray-600">
+			Open the personal link from your invitation, tap "Check in now", and scan the code again
+			within 30 seconds.
+		</p>
 		<button
 			type="button"
 			onclick={confirmWithPasskey}
 			disabled={confirming}
-			class="rounded-md bg-blue-600 px-4 py-2 text-white transition hover:bg-blue-700 disabled:opacity-50"
+			class="self-start text-sm text-gray-500 underline disabled:opacity-50"
 		>
-			{confirming ? 'Waiting for your device…' : 'Check in with a passkey'}
+			{confirming ? 'Waiting for your device…' : 'Organizer? Check in with your passkey'}
 		</button>
-		<p class="text-sm text-gray-500">
-			No passkey? Open the personal link from your invitation, tap "Check in now", and scan the code
-			again within 30 seconds.
-		</p>
 
 		<form method="post" action="?/withPasskey" name="withPasskey" hidden use:enhance></form>
 	{/if}
