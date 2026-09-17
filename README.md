@@ -15,7 +15,7 @@ Fill in `.env`:
 - `ORIGIN` — public origin, e.g. `http://localhost:5173` — no path, even under a sub-path (see [Serving under a sub-path](#serving-under-a-sub-path))
 - `BETTER_AUTH_SECRET` — `openssl rand -base64 32`
 
-Create the tables, then seed an admin and the guest list:
+Create the tables, then seed the superadmin and the guest list:
 
 ```sh
 pnpm db:push
@@ -73,7 +73,7 @@ volume survives, and the next `up` finds the same database.
 `tools` is the same image built one stage earlier, where the dev dependencies
 (drizzle-kit, the Vite loader `pnpm db:seed` runs on) still exist. It is behind a
 compose profile, so `docker compose up` never starts it. `db:seed` prompts for the
-admin password, which is why it is `run` and not a startup step.
+superadmin password, which is why it is `run` and not a startup step.
 
 It runs as `node`, the same user the app runs as. Left as root it would create an
 `app.db` the app can read but not write, and the only symptom is "Something went
@@ -143,12 +143,14 @@ hand the links out. The external tool guests already use opens `/setup` with the
 email in the query string.
 
 1. `pnpm db:seed --admin <email> attendees.json` seeds the guest list and creates the
-   initial admin from it — it prompts for their password. Both arguments are required,
-   and `<email>` must appear in the guest list, which is where the admin's name comes
-   from. Re-running is safe: existing emails are left alone.
-2. The admin signs in at `/login` with that password, and is prompted to add a passkey
-   (skippable; it asks again next sign-in until they do).
-3. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
+   superadmin from it — it prompts for their password. Both arguments are required,
+   and `<email>` must appear in the guest list, which is where the superadmin's name
+   comes from. Re-running is safe: existing emails are left alone.
+2. The superadmin signs in at `/login` with that password, and is prompted to add a
+   passkey (skippable; it asks again next sign-in until they do).
+3. Optionally, the superadmin makes other guests admins on `/admin` (see
+   [Admins and the superadmin](#admins-and-the-superadmin)).
+4. An admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
    The QR code **rotates every 30 seconds** and stays up indefinitely.
 
 `data/attendees.json` (the `/data` dir is gitignored):
@@ -156,6 +158,34 @@ email in the query string.
 ```json
 [{ "email": "alice@corp.com", "firstName": "Alice", "lastName": "Ng" }]
 ```
+
+### Admins and the superadmin
+
+The admin created by `pnpm db:seed` is the **superadmin**, the only one there is. It is
+an admin like any other, plus two things under **Organizers** on `/admin`, where it
+also sees who the admins are:
+
+- **Make a guest an organizer**, by email and an initial password it chooses and
+  passes on. Only guests already on the list can be promoted.
+- **Reset an organizer's password** to a temporary one, for an admin who forgot
+  theirs. It signs that admin out everywhere. The superadmin's own password can't be
+  reset this way; nobody is above it.
+
+There is no way to demote an admin or create another superadmin from the app.
+
+An initial or temporary password only gets an admin as far as changing it: they are
+held on `/admin/change-password` until they choose their own. Every other
+admin page redirects there, and the check-in stream refuses them. The new password has
+to differ from the one they were given, and they aren't asked for it again — after a
+reset they may have signed in with a passkey and never seen it. A promoted admin is
+then prompted for a passkey like the superadmin was.
+
+Any admin can change their own password from **Change your password** on `/admin`,
+with their current password. That signs them out on every other device.
+
+A database seeded before superadmins existed has none. Run `pnpm db:seed --admin`
+again with the existing admin's email and that admin becomes the superadmin — only
+while there is no superadmin, so it can't be used to add a second one.
 
 ## Checking in
 
@@ -227,7 +257,8 @@ expiry, and has a prefix of its own, so neither token passes for the other —
 
 ## Passkeys
 
-Only the admin has one. It is offered after their first password sign-in, works on
+Only admins have one. It is offered after their first password sign-in (after the
+password change, for a promoted admin), works on
 `/login`, and checks them in at the door. The server refuses a passkey registration for
 anyone who isn't an admin.
 
@@ -264,7 +295,7 @@ like the link. It doesn't work for guests:
   magic link to give guests a session to register against, and a second check-in path.
 
 So guests have one way in, the 30-second ticket, and abuse is caught by the door screen
-([What stops abuse](#what-stops-abuse)). The admin keeps a passkey: they sign in to the
+([What stops abuse](#what-stops-abuse)). Admins keep passkeys: they sign in to the
 admin pages, and there a passkey replaces a password rather than a link.
 
 Guest passkeys registered before the change are still in the `passkey` table. One can
@@ -287,7 +318,7 @@ delete from passkey where user_id in (select id from user where role = 'attendee
 | `pnpm auth:schema`                               | Regenerate `src/lib/server/db/auth.schema.ts` from the better-auth config |
 | `pnpm db:push`                                   | Apply the schema straight to the DB (no migration files)                  |
 | `pnpm db:backup` / `pnpm db:restore`             | Snapshot the DB, and put a snapshot back (see [Backups](#backups))        |
-| `pnpm db:seed`                                   | Seed the initial admin and the guest list                                 |
+| `pnpm db:seed`                                   | Seed the superadmin and the guest list                                    |
 | `pnpm db:generate` / `pnpm db:migrate`           | Generate / apply migration files                                          |
 | `pnpm db:studio`                                 | Drizzle Studio                                                            |
 
@@ -342,12 +373,16 @@ Two things that follow from this:
 
 ## Schema notes
 
-Everything outside the log lives on better-auth's own tables. The only addition is one
-column on `user`, declared in `src/lib/server/auth.ts` as an `additionalField` with
-`input: false` so nobody can set it on themselves:
+Everything outside the log lives on better-auth's own tables. The only additions are
+columns on `user`, declared in `src/lib/server/auth.ts` as `additionalFields` with
+`input: false` so nobody can set them on themselves:
 
-- `role` — `attendee` or `admin`. Named `role` rather than `is_admin` so adopting
-  better-auth's `admin` plugin later is a no-op instead of a migration.
+- `role` — `attendee`, `admin` or `superadmin`. Named `role` rather than `is_admin` so
+  adopting better-auth's `admin` plugin later is a no-op instead of a migration. The
+  superadmin is an admin too: check with `isAdmin()` / `hasAdminRole()` from
+  `src/lib/server/roles.ts`, never `role = 'admin'`, or the superadmin gets locked out.
+- `must_change_password` — set when the superadmin promotes a guest with an initial
+  password, cleared once they replace it.
 
 Deliberately absent:
 
@@ -383,6 +418,6 @@ doesn't prove.
 proxy unless adapter-node is told otherwise — set `ADDRESS_HEADER=x-forwarded-for` (and
 `XFF_DEPTH`) or the column records one address for the whole event.
 
-The admin's password goes in better-auth's `account` table as
-`provider_id = 'credential'`; guests have none. The admin's passkeys go in the `passkey` table from
+Admins' passwords go in better-auth's `account` table as
+`provider_id = 'credential'`; guests have none. Admins' passkeys go in the `passkey` table from
 `@better-auth/passkey`. Both arrive via `pnpm auth:schema`.

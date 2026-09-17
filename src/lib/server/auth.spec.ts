@@ -2,9 +2,11 @@ import { beforeAll, expect, test } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { eq } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
+import { listAdmins, promoteToAdmin, replaceTemporaryPassword, resetAdminPassword } from './admins';
 import { auth } from './auth';
 import { checkInHost } from './check-in-host';
 import { db } from './db';
+import { isAdmin } from './roles';
 import { checkIn, session, user, verification } from './db/schema';
 
 const GUEST = 'guest@example.com';
@@ -100,6 +102,44 @@ test('the seeded admin signs in with their password and is an admin', async () =
 	expect(row.role).toBe('admin');
 });
 
+test('a promoted guest signs in with the initial password until they replace it', async () => {
+	const PROMOTED = 'helper@example.com';
+	await db.insert(user).values({
+		id: crypto.randomUUID(),
+		email: PROMOTED,
+		name: 'Grace Hopper',
+		firstName: 'Grace',
+		lastName: 'Hopper',
+		role: 'attendee',
+		emailVerified: false
+	});
+
+	expect(await promoteToAdmin('nobody@example.com', 'initial-pass')).toBe('not-found');
+	expect(await promoteToAdmin(ADMIN, 'initial-pass')).toBe('already-admin');
+	expect(await promoteToAdmin(' Helper@Example.com ', 'initial-pass')).toBe('promoted');
+
+	const [promoted] = await db.select().from(user).where(eq(user.email, PROMOTED));
+	expect(promoted).toMatchObject({ role: 'admin', mustChangePassword: true });
+
+	const sessions = () => db.$count(session, eq(session.userId, promoted.id));
+	const signIn = (password: string) =>
+		auth.api.signInEmail({ body: { email: PROMOTED, password } }).catch(() => {});
+
+	await signIn('initial-pass');
+	expect(await sessions()).toBe(1);
+
+	expect(await replaceTemporaryPassword(promoted.id, 'initial-pass')).toBe('unchanged');
+	expect(await replaceTemporaryPassword(promoted.id, 'my-own-pass')).toBe('changed');
+
+	const [after] = await db.select().from(user).where(eq(user.id, promoted.id));
+	expect(after.mustChangePassword).toBe(false);
+
+	await signIn('initial-pass');
+	expect(await sessions()).toBe(1);
+	await signIn('my-own-pass');
+	expect(await sessions()).toBe(2);
+});
+
 test('one scan checks a guest in once, a later scan checks them in again', async () => {
 	const [guest] = await db.select().from(user).where(eq(user.email, GUEST));
 
@@ -136,4 +176,49 @@ test("the first guest through an admin's code checks that admin in, once", async
 	await db.delete(checkIn).where(eq(checkIn.userId, guest.id));
 	expect(checkInHost(guest.id, 'scan-five')).toBeNull();
 	expect(await db.$count(checkIn, eq(checkIn.userId, guest.id))).toBe(0);
+});
+
+test('the superadmin is an admin everywhere an admin is', async () => {
+	const id = crypto.randomUUID();
+	await db.insert(user).values({
+		id,
+		email: 'super@example.com',
+		name: 'Super Admin',
+		firstName: 'Super',
+		lastName: 'Admin',
+		role: 'superadmin',
+		emailVerified: true
+	});
+
+	expect(isAdmin({ role: 'superadmin' })).toBe(true);
+	expect(isAdmin({ role: 'attendee' })).toBe(false);
+	expect(isAdmin(undefined)).toBe(false);
+	expect((await listAdmins()).map((a) => a.email)).toContain('super@example.com');
+	expect(await promoteToAdmin('super@example.com', 'initial-pass')).toBe('already-admin');
+	// The SQL side of isAdmin: the host check-in only goes through for admins.
+	expect(checkInHost(id, 'scan-six')).toMatchObject({ firstName: 'Super' });
+});
+
+test('a reset signs the admin out and holds them to a temporary password', async () => {
+	const HELPER = 'helper@example.com';
+	const [helper] = await db.select().from(user).where(eq(user.email, HELPER));
+	const sessions = () => db.$count(session, eq(session.userId, helper.id));
+	const signIn = (password: string) =>
+		auth.api.signInEmail({ body: { email: HELPER, password } }).catch(() => {});
+	expect(await sessions()).toBeGreaterThan(0);
+
+	// Only plain admins: not guests, not the superadmin, not addresses nobody has.
+	expect(await resetAdminPassword(GUEST, 'temporary-pass')).toBe('not-admin');
+	expect(await resetAdminPassword('super@example.com', 'temporary-pass')).toBe('not-admin');
+	expect(await resetAdminPassword('nobody@example.com', 'temporary-pass')).toBe('not-admin');
+
+	expect(await resetAdminPassword(HELPER, 'temporary-pass')).toBe('reset');
+	expect(await sessions()).toBe(0);
+	const [after] = await db.select().from(user).where(eq(user.id, helper.id));
+	expect(after.mustChangePassword).toBe(true);
+
+	await signIn('my-own-pass');
+	expect(await sessions()).toBe(0);
+	await signIn('temporary-pass');
+	expect(await sessions()).toBe(1);
 });
