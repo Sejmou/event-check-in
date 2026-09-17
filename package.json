@@ -9,7 +9,7 @@
 		"dev:tailscale": "pnpm dev -- --host \"$(tailscale ip -4)\"",
 		"build": "vite build",
 		"preview": "vite preview",
-		"prepare": "svelte-kit sync || echo ''",
+		"prepare": "husky && (svelte-kit sync || echo '')",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
@@ -52,6 +52,8 @@
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-svelte": "^3.19.0",
 		"globals": "^17.6.0",
+		"husky": "^9.1.7",
+		"lint-staged": "^17.5.1",
 		"playwright": "^1.60.0",
 		"prettier": "^3.8.3",
 		"prettier-plugin-svelte": "^4.1.0",
@@ -72,5 +74,8 @@
 	},
 	"dependencies": {
 		"better-sqlite3": "^13.0.2"
+	},
+	"lint-staged": {
+		"*": "prettier --write --ignore-unknown"
 	}
 }
