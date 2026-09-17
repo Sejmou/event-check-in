@@ -33,7 +33,8 @@ docker compose run --rm tools pnpm db:seed --admin ops@example.com data/attendee
 docker compose up -d
 ```
 
-The app listens on port 3000 in the container, published on 3000. The SQLite file
+The app listens on port 3000 in the container, published on the host's `HOST_PORT`
+(3000 unless `.env` says otherwise). The SQLite file
 lives on the `db` volume, so compose overrides `DATABASE_URL` to `/data/app.db` for
 both services — the value in `.env` only applies outside Docker.
 
@@ -95,6 +96,7 @@ Read from `.env` via `env_file`, and by `pnpm dev` outside Docker:
 | `BETTER_AUTH_SECRET` | yes      | Also signs the QR and presence tokens. Changing it invalidates outstanding QR links                                                                                                                                          |
 | `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                     |
 | `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                            |
+| `HOST_PORT`          | no       | Host port compose publishes the app on. Defaults to 3000                                                                                                                                                                     |
 
 Behind a reverse proxy, `ORIGIN` is the public HTTPS URL — not the container's.
 
