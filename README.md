@@ -103,7 +103,9 @@ Behind a reverse proxy, `ORIGIN` is the public HTTPS URL — not the container's
 ## How guests get in
 
 Guests have no password and never sign in. Accounts are seeded ahead of time, and each
-guest gets a personal link instead.
+guest gets a personal link instead: `/setup?email=<their address>`. This app doesn't
+hand the links out. The external tool guests already use opens `/setup` with their
+email in the query string.
 
 1. `pnpm db:seed --admin <email> attendees.json` seeds the guest list and creates the
    initial admin from it — it prompts for their password. Both arguments are required,
@@ -111,9 +113,7 @@ guest gets a personal link instead.
    from. Re-running is safe: existing emails are left alone.
 2. The admin signs in at `/login` with that password, and is prompted to add a passkey
    (skippable; it asks again next sign-in until they do).
-3. `/admin` lists every guest with their personal link, `/setup?email=<their address>`.
-   Send each guest theirs.
-4. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
+3. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
    The QR code **rotates every 30 seconds** and stays up indefinitely.
 
 `data/attendees.json` (the `/data` dir is gitignored):
@@ -124,18 +124,32 @@ guest gets a personal link instead.
 
 ## Checking in
 
-`/setup` only opens for an email on the guest list; anything else, admins included, is a 404. There a guest taps **Check in now**: the device gets a signed ticket cookie good
+`/setup` only opens for an email on the guest list, the admin included; anything else is a 404. There a guest taps **Check in now**: the device gets a signed ticket cookie good
 for **30 seconds**. The guest scans the code at the door within that window, in the same
 browser, and `/checkin` redeems the ticket without asking for anything. Once used, it is
 gone. Next time they come in, they open the link again.
 
 Guests can't set up a passkey — see [Why guests have no passkeys](#why-guests-have-no-passkeys).
-The admin can, and checks in with it: `/setup` refuses them, so `/checkin` offers
-"Organizer? Check in with your passkey" instead.
+The admin can, and may check in with it through "Organizer? Check in with your
+passkey" on `/checkin`, or use their personal link like everyone else. `/setup` hands out a ticket and nothing
+more, so an admin's address there is no more exposed than a guest's.
 
 Every check-in puts a row in `check_in`. Re-entry is normal, so a guest may have several
 rows. A double submit is not: the unique index on `(user_id, scan_id)` collapses
 everything riding one scan into one row, while a later scan gets a row of its own.
+
+The admin showing the code gets checked in too. The first time a guest checks in
+through their screen, a second row goes in for the admin, with `method = 'host'` and
+the guest's `scan_id`, so the log shows the two side by side. It happens only if the
+admin has no check-in yet. If they checked in themselves first, or an earlier guest
+already did it for them, nothing is added. `expected` on the check-in screen counts
+admins, so they can't push `present` past it.
+
+`host` means "this admin was signed in on the screen showing the code a guest just
+scanned". It is weaker than `link` or `passkey`: nobody confirmed who was standing at
+that screen, only that one signed in as the admin was showing the code at the door. A
+screen left running, or signed in on someone else's laptop, checks the admin in all
+the same.
 
 ### What stops abuse
 
@@ -161,15 +175,16 @@ address is on the guest list.
 
 ### What the QR code actually proves
 
-A code is an HMAC of the current 30-second time bucket, derived from the clock rather
-than stored. The route recomputes it and accepts the current bucket and the previous
+A code is an HMAC of the current 30-second time bucket and the ID of the admin showing
+it, derived from the clock rather than stored. The route recomputes it and accepts the current bucket and the previous
 one, so a scan that crosses a rotation still works.
 
 It is deliberately **multi-use**: everyone who scans during its window gets in, which is
 the point of leaving it on screen. What it proves is that the scanner saw the check-in
 screen within the last half-minute, nothing more. On a successful scan the guest gets a
 signed presence cookie good for 10 minutes, so the code rotating while they confirm
-costs them nothing.
+costs them nothing. The cookie carries the admin's ID along, signed, so the check-in
+knows whose screen it came through, and neither token can be moved to another admin.
 
 The ticket from `/setup` is signed with the same secret but binds a user ID and its own
 expiry, and has a prefix of its own, so neither token passes for the other —
@@ -297,9 +312,7 @@ column on `user`, declared in `src/lib/server/auth.ts` as an `additionalField` w
 `input: false` so nobody can set it on themselves:
 
 - `role` — `attendee` or `admin`. Named `role` rather than `is_admin` so adopting
-  better-auth's `admin` plugin later is a no-op instead of a migration. `/setup` refuses
-  anyone who isn't an `attendee`, because it hands a check-in ticket to whoever knows
-  the address.
+  better-auth's `admin` plugin later is a no-op instead of a migration.
 
 Deliberately absent:
 
@@ -321,9 +334,15 @@ The one table that is ours. One row per check-in:
 | Column                     | Why it's there                                                                                                             |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `user_id`, `checked_in_at` | who and when                                                                                                               |
-| `method`                   | `link` (a ticket from `/setup`) or `passkey` (admins only), as verified server-side at that moment                         |
+| `method`                   | `link` (a ticket from `/setup`), `passkey` (admins only), or `host` (see below), as verified server-side at that moment    |
 | `ip_address`, `user_agent` | a code photographed and passed around shows up as check-ins from addresses that aren't the venue's                         |
 | `scan_id`                  | a non-secret handle for one scan; one device working through borrowed accounts shows up as one `scan_id` across many users |
+
+`method = 'host'` marks the admin who was signed in on the check-in screen, checked in
+automatically when the first guest got in through their code. It has no `ip_address`
+or `user_agent`, because the request that wrote it came from the guest's phone, and
+it shares that guest's `scan_id`. See [Checking in](#checking-in) for what it does and
+doesn't prove.
 
 `ip_address` comes from `event.getClientAddress()`. Behind a reverse proxy that is the
 proxy unless adapter-node is told otherwise — set `ADDRESS_HEADER=x-forwarded-for` (and

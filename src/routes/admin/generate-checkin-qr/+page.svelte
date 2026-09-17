@@ -64,7 +64,7 @@
 	</section>
 
 	<div class="flex gap-4">
-		<a href={resolve('/admin')} class="text-blue-600 underline">Guests</a>
+		<a href={resolve('/admin')} class="text-blue-600 underline">Organizer</a>
 		<a href={resolve('/admin/checkins')} class="text-blue-600 underline">Check-in log</a>
 	</div>
 </QrScreen>

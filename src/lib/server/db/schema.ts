@@ -26,9 +26,13 @@ export const checkIn = sqliteTable(
 		checkedInAt: integer('checked_in_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 			.notNull(),
-		// How they proved it was them: a ticket from their /setup link, or — organizers
-		// only — a passkey.
-		method: text('method', { enum: ['passkey', 'link'] }).notNull(),
+		// How they proved they were there:
+		// - link:    a ticket from their /setup link
+		// - passkey: their passkey (admins only)
+		// - host:    they are the admin showing the check-in code, and a guest just
+		//            checked in through it. Nobody confirmed it was them; the guest's
+		//            scan says their screen is at the door. See checkInHost.
+		method: text('method', { enum: ['passkey', 'link', 'host'] }).notNull(),
 		ipAddress: text('ip_address'),
 		userAgent: text('user_agent'),
 		// Which scan of which displayed code this rode in on.

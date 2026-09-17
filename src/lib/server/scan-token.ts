@@ -32,9 +32,12 @@ function equals(a: string, b: string) {
  * The QR payload. Derived from the clock rather than stored, so it rotates by
  * itself, needs no cleanup, and — the point of a kiosk code — is usable by
  * everyone who scans it during its window.
+ *
+ * Names the admin showing it (`hostId`), so the first guest through checks
+ * them in too — see `checkInHost`.
  */
-export function bucketToken(at = Date.now()) {
-	return hmac(`checkin:${Math.floor(at / BUCKET_MS)}`);
+export function bucketToken(hostId: string, at = Date.now()) {
+	return `${hostId}.${hmac(`checkin:${hostId}:${Math.floor(at / BUCKET_MS)}`)}`;
 }
 
 /** Milliseconds until the on-screen code changes. */
@@ -42,28 +45,37 @@ export function msUntilNextBucket(at = Date.now()) {
 	return BUCKET_MS - (at % BUCKET_MS);
 }
 
-/** Accepts the current bucket and the previous one, so a scan mid-rotation survives. */
+/**
+ * The admin showing the code, or null if it isn't ours. Accepts the current
+ * bucket and the previous one, so a scan mid-rotation survives.
+ */
 export function verifyBucketToken(token: string, at = Date.now()) {
-	return equals(token, bucketToken(at)) || equals(token, bucketToken(at - BUCKET_MS));
+	const [hostId] = token.split('.');
+	if (!hostId) return null;
+	return equals(token, bucketToken(hostId, at)) ||
+		equals(token, bucketToken(hostId, at - BUCKET_MS))
+		? hostId
+		: null;
 }
 
 /** Proof the holder scanned a live code, in a form that outlives one rotation. */
-export function issuePresence(at = Date.now()) {
+export function issuePresence(hostId: string, at = Date.now()) {
 	const expiresAt = at + PRESENCE_MS;
-	return `${expiresAt}.${hmac(`presence:${expiresAt}`)}`;
+	return `${hostId}.${expiresAt}.${hmac(`presence:${hostId}:${expiresAt}`)}`;
 }
 
+/** The admin whose code was scanned, or null if the presence is expired or not ours. */
 export function verifyPresence(value: string | undefined, at = Date.now()) {
-	if (!value) return false;
-	const [expiresAt, signature] = value.split('.');
-	if (!expiresAt || !signature) return false;
-	if (!/^\d+$/.test(expiresAt) || Number(expiresAt) < at) return false;
-	return equals(signature, hmac(`presence:${expiresAt}`));
+	if (!value) return null;
+	const [hostId, expiresAt, signature] = value.split('.');
+	if (!hostId || !expiresAt || !signature) return null;
+	if (!/^\d+$/.test(expiresAt) || Number(expiresAt) < at) return null;
+	return equals(signature, hmac(`presence:${hostId}:${expiresAt}`)) ? hostId : null;
 }
 
 /** When the scan happened, recovered from the token the scan handed out. */
 export function presenceIssuedAt(value: string) {
-	return Number(value.split('.')[0]) - PRESENCE_MS;
+	return Number(value.split('.')[1]) - PRESENCE_MS;
 }
 
 /**
@@ -71,7 +83,7 @@ export function presenceIssuedAt(value: string) {
  * Truncated so the row can never be replayed as the presence token itself.
  */
 export function scanId(value: string) {
-	return value.split('.')[1].slice(0, 16);
+	return value.split('.')[2].slice(0, 16);
 }
 
 /**
