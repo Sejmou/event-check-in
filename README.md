@@ -89,35 +89,32 @@ docker compose restart app
 
 Read from `.env` via `env_file`, and by `pnpm dev` outside Docker:
 
-| Variable             | Required | Notes                                                                                                                                                                                                                        |
-| -------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                     |
-| `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, passkeys need HTTPS, and its hostname is the passkey relying party (see [Passkeys](#passkeys)) |
-| `BETTER_AUTH_SECRET` | yes      | Also signs the QR and presence tokens. Changing it invalidates outstanding QR links                                                                                                                                          |
-| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                     |
-| `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                            |
-| `HOST_PORT`          | no       | Host port compose publishes the app on. Defaults to 3000                                                                                                                                                                     |
+| Variable             | Required | Notes                                                                                                                                                                                                                            |
+| -------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                         |
+| `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, organizer passkeys need HTTPS, and its hostname is their relying party (see [Passkeys](#passkeys)) |
+| `BETTER_AUTH_SECRET` | yes      | Also signs the QR, presence and ticket tokens. Changing it invalidates outstanding QR links                                                                                                                                      |
+| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                         |
+| `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                                |
+| `HOST_PORT`          | no       | Host port compose publishes the app on. Defaults to 3000                                                                                                                                                                         |
 
 Behind a reverse proxy, `ORIGIN` is the public HTTPS URL — not the container's.
 
-## How people get accounts
+## How guests get in
 
-There is no sign-up. Accounts are seeded ahead of time and claimed in person.
+Guests have no password and never sign in. Accounts are seeded ahead of time, and each
+guest gets a personal link instead: `/setup?email=<their address>`. This app doesn't
+hand the links out. The external tool guests already use opens `/setup` with their
+email in the query string.
 
-1. `pnpm db:seed --admin <email> attendees.json` seeds the guest list as **unclaimed**
-   accounts and creates the initial admin from it — it prompts for their password. Both
-   arguments are required, and `<email>` must appear in the guest list, which is where
-   the admin's name comes from. Re-running is safe: existing emails are left alone.
+1. `pnpm db:seed --admin <email> attendees.json` seeds the guest list and creates the
+   initial admin from it — it prompts for their password. Both arguments are required,
+   and `<email>` must appear in the guest list, which is where the admin's name comes
+   from. Re-running is safe: existing emails are left alone.
 2. The admin signs in at `/login` with that password, and is prompted to add a passkey
    (skippable; it asks again next sign-in until they do).
-3. At `/admin` a QR code is displayed. It **rotates every 30 seconds** — leave the page
-   open on the check-in screen.
-4. A guest scans it with their own phone, enters the email they were invited with, and
-   is prompted to create a passkey. Only if their device can't do passkeys are they
-   asked to set a password instead.
-5. That's the account claimed. The guest signs in at `/login` from then on.
-
-Claiming an account is not checking in — see [Checking in](#checking-in).
+3. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
+   The QR code **rotates every 30 seconds** and stays up indefinitely.
 
 `data/attendees.json` (the `/data` dir is gitignored):
 
@@ -125,72 +122,79 @@ Claiming an account is not checking in — see [Checking in](#checking-in).
 [{ "email": "alice@corp.com", "firstName": "Alice", "lastName": "Ng" }]
 ```
 
-### What the QR codes actually prove
-
-A code is an HMAC of its purpose and the current 30-second time bucket — derived from
-the clock, not stored anywhere. The route recomputes it and accepts the current bucket
-and the previous one, so a scan that crosses a rotation still works.
-
-It is deliberately **multi-use**: everyone who scans the code during its window can
-claim, which is the point of leaving it on screen. What it proves is that the scanner
-was looking at the check-in screen within the last half-minute — nothing more. On a
-successful scan the guest gets a signed, short-lived presence cookie, so the code
-rotating while they type their email costs them nothing.
-
-Two things follow from this, both deliberate:
-
-- **Closing the kiosk tab does not stop claiming.** Nobody can claim without having
-  seen a code, but there is no off switch. The smallest fix, if it's ever wanted, is a
-  `claim_open_until` timestamp the kiosk refreshes on each rotation.
-- **Anyone who scans could try other people's addresses.** Unknown, already-claimed and
-  not-on-the-list all return the same message, and the form is rate-limited per
-  presence cookie, so it leaks nothing and probing is slow.
-
-### Why the claim code and the check-in code are separate
-
-They could be one code on one route that branches on whether the account is claimed.
-They are not, because the two gate very different things:
-
-|                  | `/claim`              | `/checkin`                                 |
-| ---------------- | --------------------- | ------------------------------------------ |
-| Who can use it   | anyone holding a scan | only someone with the account's credential |
-| What it grants   | the account itself    | a row in `check_in`                        |
-| Where it belongs | the staffed desk      | any door, all evening                      |
-
-Merging them would attach the account-claiming surface to every screen showing the
-check-in code — and the check-in screen is exactly the one you want unattended at a
-second entrance, up for hours, in the background of people's photos. Keeping them apart
-also means a leaked code rotates one capability rather than both.
-
-The separation is in the HMAC itself (`claim:<bucket>` vs `checkin:<bucket>`), not in a
-check somewhere, so a code shown at the door is simply not a valid claim code —
-`src/lib/server/scan-token.spec.ts` pins that down. The cost is one `purpose` argument.
-
 ## Checking in
 
-1. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
-   Like the claim code it rotates every 30 seconds and stays up indefinitely.
-2. A guest scans it and lands on `/checkin`, which gets the same signed presence cookie
-   the claim flow uses.
-3. They confirm it is them — a passkey if they have one, otherwise email and password.
-   A session alone is not enough: the credential is checked again on the spot, so a
-   borrowed unlocked phone can't check somebody in.
-4. A row goes into `check_in`.
+`/setup` only opens for an email on the guest list, the admin included; anything else is a 404. There a guest taps **Check in now**: the device gets a signed ticket cookie good
+for **30 seconds**. The guest scans the code at the door within that window, in the same
+browser, and `/checkin` redeems the ticket without asking for anything. Once used, it is
+gone. Next time they come in, they open the link again.
 
-Re-entry is normal, so a guest may have several rows. A double submit is not: the
-unique index on `(user_id, scan_id)` collapses everything riding one scan into one row,
-while a later scan gets a row of its own.
+Guests can't set up a passkey — see [Why guests have no passkeys](#why-guests-have-no-passkeys).
+The admin can, and may check in with it through "Organizer? Check in with your
+passkey" on `/checkin`, or use their personal link like everyone else. `/setup` hands out a ticket and nothing
+more, so an admin's address there is no more exposed than a guest's.
 
-Guests who scan the check-in code before claiming are sent to `/claim` — there is no
-credential for them to confirm with yet.
+Every check-in puts a row in `check_in`. Re-entry is normal, so a guest may have several
+rows. A double submit is not: the unique index on `(user_id, scan_id)` collapses
+everything riding one scan into one row, while a later scan gets a row of its own.
 
-`/admin/checkins` is the log: every row, newest first, with the two things worth seeing
-at a glance flagged. `again` is a guest who had already checked in earlier; `shared` is
-an address more than one guest checked in from. Neither is wrong on its own — people
-step out for air, and a whole table shares one hotspot — but a code that leaked looks
-like several guests on one address who never passed the desk.
+The admin showing the code gets checked in too. The first time a guest checks in
+through their screen, a second row goes in for the admin, with `method = 'host'` and
+the guest's `scan_id`, so the log shows the two side by side. It happens only if the
+admin has no check-in yet. If they checked in themselves first, or an earlier guest
+already did it for them, nothing is added. `expected` on the check-in screen counts
+admins, so they can't push `present` past it.
+
+`host` means "this admin was signed in on the screen showing the code a guest just
+scanned". It is weaker than `link` or `passkey`: nobody confirmed who was standing at
+that screen, only that one signed in as the admin was showing the code at the door. A
+screen left running, or signed in on someone else's laptop, checks the admin in all
+the same.
+
+### What stops abuse
+
+Very little up front, on purpose. Anyone holding a guest's link can check that guest in.
+The personal link is the invitation, and it
+should be treated like one.
+
+What catches it is the screen at the door. Every check-in shows up there as it happens,
+as a toast with the guest's name, and the last five stay listed under the code. A name
+appearing that doesn't belong to the person standing in front of the screen is visible
+to everyone in the queue. The toasts come over server-sent events from
+`/admin/checkins/stream`, fanned out in-process, so they reach screens on the same
+server only.
+
+`/admin/checkins` is the full log afterwards, newest first, with the two things worth
+seeing at a glance flagged. `again` is a guest who had already checked in earlier;
+`shared` is an address more than one guest checked in from. Neither is wrong on its own
+— people step out for air, and a whole table shares one hotspot — but a code that leaked
+looks like several guests on one address who never passed the door.
+
+Also, `/setup` answers 404 for unknown addresses, so it tells anyone who tries whether an
+address is on the guest list.
+
+### What the QR code actually proves
+
+A code is an HMAC of the current 30-second time bucket and the ID of the admin showing
+it, derived from the clock rather than stored. The route recomputes it and accepts the current bucket and the previous
+one, so a scan that crosses a rotation still works.
+
+It is deliberately **multi-use**: everyone who scans during its window gets in, which is
+the point of leaving it on screen. What it proves is that the scanner saw the check-in
+screen within the last half-minute, nothing more. On a successful scan the guest gets a
+signed presence cookie good for 10 minutes, so the code rotating while they confirm
+costs them nothing. The cookie carries the admin's ID along, signed, so the check-in
+knows whose screen it came through, and neither token can be moved to another admin.
+
+The ticket from `/setup` is signed with the same secret but binds a user ID and its own
+expiry, and has a prefix of its own, so neither token passes for the other —
+`src/lib/server/scan-token.spec.ts` pins that down.
 
 ## Passkeys
+
+Only the admin has one. It is offered after their first password sign-in, works on
+`/login`, and checks them in at the door. The server refuses a passkey registration for
+anyone who isn't an admin.
 
 The relying party ID is `ORIGIN`'s hostname. It is not configured separately: WebAuthn
 requires it to match the hostname in the browser's address bar, and the passkey plugin
@@ -198,14 +202,43 @@ already defaults it to `baseURL`'s hostname, so a second setting could only ever
 Changing `ORIGIN`'s hostname invalidates every passkey already registered, so settle it
 before the event.
 
-WebAuthn also needs a **secure context**: HTTPS, or `localhost` exactly. Guests scan on
-their own phones, so plain-HTTP LAN or Tailscale testing will always fall through to
-the password branch. That is the fallback working correctly, but it means the passkey
+WebAuthn also needs a **secure context**: HTTPS, or `localhost` exactly. The passkey
 path can't be tested off `localhost` without `tailscale serve` or a real certificate.
 
-Device support is detected with `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`.
-That check misreports on private-mode browsers and managed devices, in both directions,
-so the UI always keeps a manual way over to the password form.
+### Why guests have no passkeys
+
+Guests could set up a passkey on `/setup` at one point. That was removed. The goal
+was a credential that stays on the guest's phone, so a passkey couldn't be handed around
+like the link. It doesn't work for guests:
+
+- **Phone passkeys are synced.** A passkey made on an iPhone goes into iCloud Keychain,
+  and on Android into Google Password Manager. Both always sync, and so do third-party
+  managers like 1Password. There is no setting to keep one on the device only. A
+  device-bound credential on a phone in practice means a hardware security key, which
+  guests don't carry.
+- **The site can't ask for a device-bound passkey.** WebAuthn has no option to require
+  a passkey that isn't synced. The server only learns whether it is synced (the
+  backup-eligible flag) after the guest has already used their face or fingerprint, so
+  enforcing it would mean rejecting almost every guest after they had done everything
+  right.
+- **The flag can't be trusted anyway.** The authenticator reports it, and proving it
+  would take attestation, which this app doesn't collect.
+- **A synced passkey adds nothing over the link.** It can be shared with anyone on the
+  same Apple or Google account, and whoever can set one up already holds the personal
+  link, which checks the guest in on its own. It also needed extra code: a server-side
+  magic link to give guests a session to register against, and a second check-in path.
+
+So guests have one way in, the 30-second ticket, and abuse is caught by the door screen
+([What stops abuse](#what-stops-abuse)). The admin keeps a passkey: they sign in to the
+admin pages, and there a passkey replaces a password rather than a link.
+
+Guest passkeys registered before the change are still in the `passkey` table. One can
+still sign in, but it doesn't check anyone in, and `/` and `/checkin` end the session.
+To clear them:
+
+```sql
+delete from passkey where user_id in (select id from user where role = 'attendee');
+```
 
 ## Commands
 
@@ -274,12 +307,10 @@ Two things that follow from this:
 
 ## Schema notes
 
-Everything the claim flow needs lives on better-auth's own tables. The only additions
-are two columns on `user`, both declared in `src/lib/server/auth.ts` as
-`additionalFields` with `input: false` so nobody can set them on themselves:
+Everything outside the log lives on better-auth's own tables. The only addition is one
+column on `user`, declared in `src/lib/server/auth.ts` as an `additionalField` with
+`input: false` so nobody can set it on themselves:
 
-- `claimed_at` — `NULL` means the account is seeded but unclaimed. That single nullable
-  timestamp is the whole "inactive account" concept.
 - `role` — `attendee` or `admin`. Named `role` rather than `is_admin` so adopting
   better-auth's `admin` plugin later is a no-op instead of a migration.
 
@@ -287,13 +318,13 @@ Deliberately absent:
 
 - No summary or attendance table — the log page derives its counts from `check_in` on
   each load, and a stored total can only drift from the rows it claims to count.
-- No pending-user or invite table — a seeded row goes straight into `user`, so the
-  `UNIQUE` constraint on email is the dedupe and passkeys can reference `user.id` at once.
-- No claim-token table — the QR code is derived from the clock (see above).
-- No `auth_method` column on `user` — a `passkey` row or a `credential` `account` row
-  already says what somebody has, and a copy of that can only drift. `check_in.method`
-  is a different thing: what was verified at one moment, which is history and cannot
-  drift.
+- No invite or setup-token table — the link is the email itself, a seeded row goes
+  straight into `user`, and the `UNIQUE` constraint on email is the dedupe.
+- No QR or ticket table — both are signed and carry their own expiry (see above).
+- No `auth_method` column on `user` — guests all have the link, and an admin's `passkey`
+  row already says what they have.
+  `check_in.method` is a different thing: what was used at one moment, which is history
+  and cannot drift.
 - No "has the admin added a passkey" column — that is the `passkey` table.
 
 ### `check_in`
@@ -303,14 +334,20 @@ The one table that is ours. One row per check-in:
 | Column                     | Why it's there                                                                                                             |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `user_id`, `checked_in_at` | who and when                                                                                                               |
-| `method`                   | `passkey` or `password`, as verified server-side at that moment                                                            |
+| `method`                   | `link` (a ticket from `/setup`), `passkey` (admins only), or `host` (see below), as verified server-side at that moment    |
 | `ip_address`, `user_agent` | a code photographed and passed around shows up as check-ins from addresses that aren't the venue's                         |
 | `scan_id`                  | a non-secret handle for one scan; one device working through borrowed accounts shows up as one `scan_id` across many users |
+
+`method = 'host'` marks the admin who was signed in on the check-in screen, checked in
+automatically when the first guest got in through their code. It has no `ip_address`
+or `user_agent`, because the request that wrote it came from the guest's phone, and
+it shares that guest's `scan_id`. See [Checking in](#checking-in) for what it does and
+doesn't prove.
 
 `ip_address` comes from `event.getClientAddress()`. Behind a reverse proxy that is the
 proxy unless adapter-node is told otherwise — set `ADDRESS_HEADER=x-forwarded-for` (and
 `XFF_DEPTH`) or the column records one address for the whole event.
 
-Passwords (the admin's, and the guest fallback) go in better-auth's `account` table as
-`provider_id = 'credential'`. Passkeys go in the `passkey` table from
+The admin's password goes in better-auth's `account` table as
+`provider_id = 'credential'`; guests have none. The admin's passkeys go in the `passkey` table from
 `@better-auth/passkey`. Both arrive via `pnpm auth:schema`.

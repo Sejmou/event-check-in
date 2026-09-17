@@ -1,140 +1,126 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { APIError } from 'better-auth/api';
-import { desc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { auth } from '$lib/server/auth';
+import { publishCheckIn } from '$lib/server/check-in-events';
+import { checkInHost } from '$lib/server/check-in-host';
 import { db } from '$lib/server/db';
-import { checkIn, passkey } from '$lib/server/db/schema';
+import { checkIn, passkey, user } from '$lib/server/db/schema';
 import {
 	issuePresence,
-	presenceCookie,
+	PRESENCE_COOKIE,
 	presenceCookieOptions,
 	presenceIssuedAt,
 	scanId,
+	TICKET_COOKIE,
+	ticketCookieOptions,
 	verifyBucketToken,
-	verifyPresence
+	verifyPresence,
+	verifyTicket
 } from '$lib/server/scan-token';
-import { tooManyAttempts } from '$lib/server/throttle';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 const NO_PRESENCE = 'This code has expired. Scan the one showing on the screen.';
-/** Same wording whichever half was wrong, so this can't be used to probe the guest list. */
-const NO_MATCH = 'Wrong email or password.';
 const NOT_FRESH = 'We could not confirm that was you. Try again.';
-
-const MAX_ATTEMPTS = 10;
-
-const COOKIE = presenceCookie('checkin');
-const COOKIE_OPTIONS = presenceCookieOptions('checkin');
+const NO_TICKET =
+	'More than 30 seconds passed. Open your personal link, tap "Check in now" and scan again.';
 
 export const load: PageServerLoad = async (event) => {
 	const token = event.url.searchParams.get('t');
-	if (token && verifyBucketToken('checkin', token)) {
-		event.cookies.set(COOKIE, issuePresence('checkin'), COOKIE_OPTIONS);
+	const hostId = token && verifyBucketToken(token);
+	if (hostId) {
+		event.cookies.set(PRESENCE_COOKIE, issuePresence(hostId), presenceCookieOptions);
 		redirect(302, '/checkin');
 	}
 
-	// Signed in but never finished setting up: there is no credential to confirm
-	// with, so the desk is the only way forward.
-	if (event.locals.user && !event.locals.user.claimedAt) redirect(302, '/claim');
-
-	const presence = event.cookies.get(COOKIE);
-	const present = verifyPresence('checkin', presence);
-	const user = event.locals.user ?? null;
-
-	const [last] = user
-		? await db
-				.select({ at: checkIn.checkedInAt, method: checkIn.method, scanId: checkIn.scanId })
-				.from(checkIn)
-				.where(eq(checkIn.userId, user.id))
-				.orderBy(desc(checkIn.checkedInAt))
-				.limit(1)
-		: [];
-
 	return {
-		present,
-		user,
-		lastCheckIn: last ?? null,
-		// Confirmation is per scan, so a guest coming back in later is asked again
-		// rather than being shown a stale tick.
-		checkedIn: Boolean(present && last && last.scanId === scanId(presence!))
+		present: verifyPresence(event.cookies.get(PRESENCE_COOKIE)) !== null,
+		// Only whether there is one — the page submits it straight back.
+		hasTicket: verifyTicket(event.cookies.get(TICKET_COOKIE)) !== null
 	};
 };
 
 export const actions: Actions = {
-	/**
-	 * The credential check happens here, so the recorded method is what the
-	 * server itself verified rather than what the browser claimed.
-	 */
-	withPassword: async (event) => {
-		const presence = event.cookies.get(COOKIE);
-		if (!verifyPresence('checkin', presence)) return fail(403, { message: NO_PRESENCE });
-		if (tooManyAttempts(presence!, MAX_ATTEMPTS)) return fail(429, { message: NO_MATCH });
+	/** A ticket from `/setup`, which this device picked up in the last 30 seconds. */
+	withTicket: async (event) => {
+		const presence = event.cookies.get(PRESENCE_COOKIE);
+		const hostId = verifyPresence(presence);
+		if (!hostId) return fail(403, { message: NO_PRESENCE });
 
-		const formData = await event.request.formData();
-		const email = formData.get('email')?.toString().trim() ?? '';
-		const password = formData.get('password')?.toString() ?? '';
+		const userId = verifyTicket(event.cookies.get(TICKET_COOKIE));
+		if (!userId) return fail(403, { message: NO_TICKET });
+		// One ticket, one check-in.
+		event.cookies.delete(TICKET_COOKIE, ticketCookieOptions);
 
-		let signedIn;
-		try {
-			signedIn = await auth.api.signInEmail({ body: { email, password } });
-		} catch (error) {
-			if (error instanceof APIError) return fail(400, { message: NO_MATCH });
-			// Whatever reaches here is not a rejected credential — a locked or
-			// read-only database, say. Nobody can act on "something went wrong"
-			// without it in the log.
-			console.error('sign-in failed:', error);
-			return fail(500, { message: 'Something went wrong. Try again.' });
-		}
-
-		return record(event, signedIn.user.id, 'password', presence!);
+		return record(event, userId, 'link', presence!, hostId);
 	},
 
 	/**
-	 * The assertion itself was verified by better-auth's own endpoint when the
-	 * browser called `signIn.passkey`, which mints a fresh session — so requiring
-	 * a session newer than the scan is what proves it just happened here.
+	 * Organizers only: guests have no passkeys (see the README). The assertion
+	 * itself was verified by better-auth's own endpoint when the browser called
+	 * `signIn.passkey`, which mints a fresh session — so requiring a session newer
+	 * than the scan is what proves it just happened here.
 	 */
 	withPasskey: async (event) => {
-		const presence = event.cookies.get(COOKIE);
-		if (!verifyPresence('checkin', presence)) return fail(403, { message: NO_PRESENCE });
+		const presence = event.cookies.get(PRESENCE_COOKIE);
+		const hostId = verifyPresence(presence);
+		if (!hostId) return fail(403, { message: NO_PRESENCE });
 
-		const { user, session } = event.locals;
-		if (!user || !session) return fail(403, { message: NOT_FRESH });
+		const { user: current, session } = event.locals;
+		if (!current || !session) return fail(403, { message: NOT_FRESH });
+		// A guest passkey registered before guests lost them still signs in. It
+		// doesn't check anyone in, and the session it made ends here.
+		if (current.role !== 'admin') {
+			await auth.api.signOut({ headers: event.request.headers });
+			return fail(403, { message: NO_TICKET });
+		}
 		if (session.createdAt.getTime() < presenceIssuedAt(presence!)) {
 			return fail(403, { message: NOT_FRESH });
 		}
-		// ponytail: a fresh session from a *password* sign-in in another tab would
-		// also land here and be filed as a passkey. It mislabels only the user's
-		// own row and grants nothing; give better-auth's session a method column if
-		// the distinction ever has to hold up.
-		if ((await db.$count(passkey, eq(passkey.userId, user.id))) === 0) {
+		// ponytail: a fresh *password* sign-in in another tab would also land here
+		// and be filed as a passkey. It can only mislabel an admin's own row.
+		if ((await db.$count(passkey, eq(passkey.userId, current.id))) === 0) {
 			return fail(403, { message: NOT_FRESH });
 		}
 
-		return record(event, user.id, 'passkey', presence!);
+		return record(event, current.id, 'passkey', presence!, hostId);
 	}
 };
 
 async function record(
 	event: RequestEvent,
 	userId: string,
-	method: 'passkey' | 'password',
-	presence: string
+	method: 'passkey' | 'link',
+	presence: string,
+	hostId: string
 ) {
-	const scan = scanId(presence);
+	const [guest] = await db
+		.select({ firstName: user.firstName, lastName: user.lastName })
+		.from(user)
+		.where(eq(user.id, userId))
+		.limit(1);
+	// Signed tickets outlive nothing, but a guest deleted from the list in the
+	// last 30 seconds would otherwise hit the foreign key.
+	if (!guest) return fail(403, { message: NOT_FRESH });
 
 	// Re-entry later means a new scan and a new row; a double submit rides the
 	// same one and is dropped by the unique index.
-	await db
+	const [row] = await db
 		.insert(checkIn)
 		.values({
 			userId,
 			method,
-			scanId: scan,
+			scanId: scanId(presence),
 			ipAddress: event.getClientAddress(),
 			userAgent: event.request.headers.get('user-agent')
 		})
-		.onConflictDoNothing();
+		.onConflictDoNothing()
+		.returning({ id: checkIn.id, at: checkIn.checkedInAt });
 
-	redirect(303, '/checkin');
+	if (row) {
+		publishCheckIn({ ...guest, id: row.id, at: row.at.getTime() });
+		const host = checkInHost(hostId, scanId(presence));
+		if (host) publishCheckIn(host);
+	}
+
+	return { checkedIn: guest.firstName };
 }

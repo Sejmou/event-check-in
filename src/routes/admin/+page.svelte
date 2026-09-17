@@ -1,26 +1,17 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
-	import QrScreen from '$lib/components/qr-screen.svelte';
-	import type { PageServerData } from './$types';
-
-	let { data }: { data: PageServerData } = $props();
 </script>
 
-<svelte:head><title>Check-in desk</title></svelte:head>
+<svelte:head><title>Organizer</title></svelte:head>
 
-<QrScreen
-	title="Scan to set up your account"
-	qr={data.qr}
-	msUntilNextBucket={data.msUntilNextBucket}
->
-	<p class="text-gray-600">
-		{data.claimed} of {data.total} accounts set up. This code changes automatically — leave this page
-		open.
-	</p>
-	<div class="flex gap-4">
-		<a href={resolve('/admin/generate-checkin-qr')} class="text-blue-600 underline">
-			Show the check-in code
-		</a>
-		<a href={resolve('/admin/checkins')} class="text-blue-600 underline">Check-in log</a>
-	</div>
-</QrScreen>
+<main class="mx-auto flex min-h-svh max-w-sm flex-col justify-center gap-6 p-6">
+	<h1 class="text-2xl font-semibold">Organizer</h1>
+	<a href={resolve('/admin/generate-checkin-qr')} class="text-blue-600 underline">
+		Show the check-in code
+	</a>
+	<a href={resolve('/admin/checkins')} class="text-blue-600 underline">Check-in log</a>
+	<form method="post" action="?/signOut" use:enhance>
+		<button class="text-gray-500 underline">Sign out</button>
+	</form>
+</main>

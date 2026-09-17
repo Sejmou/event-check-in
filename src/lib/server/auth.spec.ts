@@ -1,8 +1,9 @@
 import { beforeAll, expect, test } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
-import { auth, mintSession } from './auth';
+import { auth } from './auth';
+import { checkInHost } from './check-in-host';
 import { db } from './db';
 import { checkIn, session, user, verification } from './db/schema';
 
@@ -31,8 +32,7 @@ async function seedGuest() {
 		firstName: 'Ada',
 		lastName: 'Lovelace',
 		role: 'attendee',
-		emailVerified: false,
-		claimedAt: null
+		emailVerified: false
 	});
 }
 
@@ -52,30 +52,15 @@ test('registration is closed', async () => {
 	expect(await db.$count(user, eq(user.email, 'walkup@example.com'))).toBe(0);
 });
 
-test('a seeded guest is signed in without a credential, so they can make one', async () => {
+test('a guest has no password to sign in with', async () => {
 	await seedGuest();
-
 	const [guest] = await db.select().from(user).where(eq(user.email, GUEST));
-	expect(guest.claimedAt).toBeNull();
+	const before = await db.$count(session, eq(session.userId, guest.id));
 
-	// sveltekitCookies needs a real request and throws without one. The session
-	// row is written before that, and the row is what the claim flow relies on.
-	await mintSession(GUEST, new Headers()).catch(() => {});
+	await auth.api.signInEmail({ body: { email: GUEST, password: '' } }).catch(() => {});
+	await auth.api.signInEmail({ body: { email: GUEST, password: 'correct-horse' } }).catch(() => {});
 
-	expect(await db.$count(session, eq(session.userId, guest.id))).toBe(1);
-});
-
-test('claiming is guarded so it cannot happen twice', async () => {
-	const claim = () =>
-		db
-			.update(user)
-			.set({ claimedAt: new Date() })
-			.where(and(eq(user.email, GUEST), isNull(user.claimedAt)))
-			.returning({ id: user.id });
-
-	expect(await claim()).toHaveLength(1);
-	// A double submit finds nothing left to claim.
-	expect(await claim()).toHaveLength(0);
+	expect(await db.$count(session, eq(session.userId, guest.id))).toBe(before);
 });
 
 test('the seeded admin signs in with their password and is an admin', async () => {
@@ -88,8 +73,7 @@ test('the seeded admin signs in with their password and is an admin', async () =
 			firstName: 'Ops',
 			lastName: 'Admin',
 			role: 'admin',
-			emailVerified: true,
-			claimedAt: new Date()
+			emailVerified: true
 		},
 		{ method: 'admin' }
 	);
@@ -122,7 +106,7 @@ test('one scan checks a guest in once, a later scan checks them in again', async
 	const arrive = (scanId: string) =>
 		db
 			.insert(checkIn)
-			.values({ userId: guest.id, method: 'passkey', scanId, ipAddress: '10.0.0.1' })
+			.values({ userId: guest.id, method: 'link', scanId, ipAddress: '10.0.0.1' })
 			.onConflictDoNothing();
 
 	await arrive('scan-one');
@@ -133,4 +117,23 @@ test('one scan checks a guest in once, a later scan checks them in again', async
 	// Stepping out and back in is a fresh scan, and a row of its own.
 	await arrive('scan-two');
 	expect(await db.$count(checkIn, eq(checkIn.userId, guest.id))).toBe(2);
+});
+
+test("the first guest through an admin's code checks that admin in, once", async () => {
+	const [admin] = await db.select().from(user).where(eq(user.email, ADMIN));
+	const [guest] = await db.select().from(user).where(eq(user.email, GUEST));
+	const hostRows = () => db.select().from(checkIn).where(eq(checkIn.userId, admin.id));
+
+	expect(checkInHost(admin.id, 'scan-three')).toMatchObject({ firstName: 'Ops' });
+	const [row] = await hostRows();
+	expect(row).toMatchObject({ method: 'host', scanId: 'scan-three', ipAddress: null });
+
+	// The next guest through the same screen doesn't add another.
+	expect(checkInHost(admin.id, 'scan-four')).toBeNull();
+	expect(await hostRows()).toHaveLength(1);
+
+	// A code naming someone who isn't an admin checks nobody in.
+	await db.delete(checkIn).where(eq(checkIn.userId, guest.id));
+	expect(checkInHost(guest.id, 'scan-five')).toBeNull();
+	expect(await db.$count(checkIn, eq(checkIn.userId, guest.id))).toBe(0);
 });

@@ -20,6 +20,8 @@
 			passkeyError = 'That passkey did not work. Use your password instead.';
 			return;
 		}
+		// Through / rather than straight to /admin: it sends admins on and signs a
+		// leftover guest passkey back out.
 		await goto(resolve('/'), { invalidateAll: true });
 	}
 </script>
@@ -27,7 +29,7 @@
 <svelte:head><title>Sign in</title></svelte:head>
 
 <main class="mx-auto flex min-h-svh max-w-sm flex-col justify-center gap-6 p-6">
-	<h1 class="text-2xl font-semibold">Sign in</h1>
+	<h1 class="text-2xl font-semibold">Organizer sign-in</h1>
 
 	<button
 		type="button"
