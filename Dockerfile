@@ -14,6 +14,8 @@ WORKDIR /app
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile
 COPY --chown=node:node . .
+# The sub-path is compiled into the build, and .env is not in the image.
+ARG BASE_PATH=""
 RUN pnpm build
 
 # Same tree, dev dependencies stripped. Kept separate so the `build` stage stays

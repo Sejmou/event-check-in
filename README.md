@@ -12,7 +12,7 @@ cp .env.example .env
 Fill in `.env`:
 
 - `DATABASE_URL` — SQLite file path, e.g. `local.db`
-- `ORIGIN` — public base URL, e.g. `http://localhost:5173`
+- `ORIGIN` — public origin, e.g. `http://localhost:5173` — no path, even under a sub-path (see [Serving under a sub-path](#serving-under-a-sub-path))
 - `BETTER_AUTH_SECRET` — `openssl rand -base64 32`
 
 Create the tables, then seed an admin and the guest list:
@@ -87,18 +87,53 @@ docker compose restart app
 
 ### Environment
 
-Read from `.env` via `env_file`, and by `pnpm dev` outside Docker:
+Read from `.env` via `env_file`, and by `pnpm dev` outside Docker.
 
-| Variable             | Required | Notes                                                                                                                                                                                                                            |
-| -------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`       | yes      | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                         |
-| `ORIGIN`             | yes      | Public base URL, scheme included. adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, organizer passkeys need HTTPS, and its hostname is their relying party (see [Passkeys](#passkeys)) |
-| `BETTER_AUTH_SECRET` | yes      | Also signs the QR, presence and ticket tokens. Changing it invalidates outstanding QR links                                                                                                                                      |
-| `ADDRESS_HEADER`     | no       | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                         |
-| `PORT`               | no       | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                                |
-| `HOST_PORT`          | no       | Host port compose publishes the app on. Defaults to 3000                                                                                                                                                                         |
+Most are read when the server **starts**: change them and restart, no rebuild. With
+Docker that means `docker compose up -d`, which recreates the container with the new
+`.env` (a plain `restart` keeps the old values). `BASE_PATH` is the exception: it is
+compiled into the **build**, so changing it means `pnpm build` or
+`docker compose build` first. `HOST_PORT` is compose's own and never reaches the app.
+
+| Variable             | Required | Read at      | Notes                                                                                                                                                                                                                                                                                        |
+| -------------------- | -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | yes      | start        | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                                                                                     |
+| `ORIGIN`             | yes      | start        | Public origin: scheme, host, port — **never a path**, see [below](#serving-under-a-sub-path). adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, organizer passkeys need HTTPS, and its hostname is their relying party (see [Passkeys](#passkeys)) |
+| `BETTER_AUTH_SECRET` | yes      | start        | Also signs the QR, presence and ticket tokens. Changing it invalidates outstanding QR links                                                                                                                                                                                                  |
+| `BASE_PATH`          | no       | **build**    | Sub-path the app is served under, e.g. `/check-in`. See [below](#serving-under-a-sub-path)                                                                                                                                                                                                   |
+| `ADDRESS_HEADER`     | no       | start        | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                                                                                     |
+| `PORT`               | no       | start        | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                                                                                            |
+| `HOST_PORT`          | no       | compose `up` | Host port compose publishes the app on. Defaults to 3000                                                                                                                                                                                                                                     |
 
 Behind a reverse proxy, `ORIGIN` is the public HTTPS URL — not the container's.
+
+### Serving under a sub-path
+
+To serve the app at `https://example.com/check-in` while `/` is something else:
+
+```sh
+ORIGIN=https://example.com   # not https://example.com/check-in
+BASE_PATH=/check-in
+```
+
+It's tempting to put the whole URL in `ORIGIN`. Don't: it is an _origin_, and the
+path would be lost or break things, depending on who reads it. adapter-node quietly
+drops it, so pages would still load and hide the mistake. WebAuthn compares it
+against the browser's origin, which never has a path, so every passkey sign-in and
+registration would fail. better-auth, handed a URL with a path, takes that path as
+its entire endpoint and ignores `basePath`. The app builds full URLs (the check-in
+QR code) from `ORIGIN` plus `BASE_PATH`.
+
+`BASE_PATH` becomes SvelteKit's `paths.base`, which is compiled into the build: it
+is read from the environment (or `.env`) when `pnpm build` runs, not when the server
+starts. With Docker, compose passes it as a build arg, so change it and
+`docker compose build` again. `pnpm dev` picks it up too, which is the quickest way
+to try a sub-path locally.
+
+The reverse proxy has to forward requests **with the prefix intact** —
+`/check-in/admin` reaches the app as `/check-in/admin`, not `/admin`. Links, redirects,
+cookie paths, the auth endpoints (`/check-in/api/auth`) and the QR code all include it.
+Personal links become `/check-in/setup?email=…`.
 
 ## How guests get in
 
