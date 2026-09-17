@@ -7,6 +7,10 @@
 	import favicon from '$lib/assets/favicon.svg';
 
 	let { children } = $props();
+
+	// resolve() adds the base path back, so take it off first: resolve('/') is the
+	// base plus its trailing slash.
+	const path = $derived(page.url.pathname.slice(resolve('/').length - 1) as Pathname);
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
@@ -14,6 +18,6 @@
 
 <div style="display:none">
 	{#each locales as locale (locale)}
-		<a href={resolve(localizeHref(page.url.pathname, { locale }) as Pathname)}>{locale}</a>
+		<a href={resolve(localizeHref(path, { locale }) as Pathname)}>{locale}</a>
 	{/each}
 </div>

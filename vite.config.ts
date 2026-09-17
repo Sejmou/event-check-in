@@ -1,11 +1,12 @@
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import tailwindcss from '@tailwindcss/vite';
+import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
 	plugins: [
 		tailwindcss(),
 		sveltekit({
@@ -15,6 +16,14 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 			adapter: adapter(),
+			paths: {
+				// Baked in at build time, so it comes from the build's environment (or
+				// .env), not the server's. See "Serving under a sub-path" in the README.
+				base: loadEnv(mode, process.cwd(), '').BASE_PATH as '' | `/${string}` | undefined,
+				// Absolute, not relative: resolve() also builds redirects and cookie
+				// paths, and a cookie path can't be relative.
+				relative: false
+			},
 			typescript: {
 				config: (config) => {
 					config.include.push('../drizzle.config.ts');
@@ -56,4 +65,4 @@ export default defineConfig({
 			}
 		]
 	}
-});
+}));
