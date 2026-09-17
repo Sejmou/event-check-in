@@ -20,8 +20,9 @@ RUN pnpm build
 
 # Same tree, dev dependencies stripped. Kept separate so the `build` stage stays
 # usable as the tools image (drizzle-kit and the seed script are dev deps).
+# --ignore-scripts: prune re-runs `prepare`, whose husky was just pruned away.
 FROM build AS prod-deps
-RUN pnpm prune --prod
+RUN pnpm prune --prod --ignore-scripts
 
 FROM node:24-slim AS runtime
 WORKDIR /app
