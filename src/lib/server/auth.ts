@@ -1,4 +1,6 @@
 import { building } from '$app/environment';
+import { resolve } from '$app/paths';
+import type { Pathname } from '$app/types';
 import { and, eq } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { betterAuth } from 'better-auth/minimal';
@@ -11,7 +13,11 @@ import { db } from '$lib/server/db';
 import { user } from '$lib/server/db/schema';
 
 export const auth = betterAuth({
+	// ORIGIN is scheme and host only. better-auth would take any path on it as the
+	// whole auth endpoint and ignore basePath, so the app's sub-path goes here.
 	baseURL: env.ORIGIN,
+	// Not a route of ours, hence the cast; resolve() just adds the base path.
+	basePath: resolve('/api/auth' as Pathname),
 	// Placeholder while `vite build` analyses the routes with no env set —
 	// better-auth throws on a missing secret. See $lib/server/db.
 	secret: building ? 'build-time-placeholder' : env.BETTER_AUTH_SECRET,

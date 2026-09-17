@@ -1,13 +1,14 @@
 import { countDistinct, desc, eq } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { env } from '$env/dynamic/private';
+import { resolve } from '$app/paths';
 import { db } from '$lib/server/db';
 import { checkIn, user } from '$lib/server/db/schema';
 import { bucketToken, msUntilNextBucket } from '$lib/server/scan-token';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async (event) => {
-	const checkinUrl = new URL('/checkin', env.ORIGIN);
+	const checkinUrl = new URL(resolve('/checkin'), env.ORIGIN);
 	// The admin layout already turned away anyone who isn't one.
 	checkinUrl.searchParams.set('t', bucketToken(event.locals.user!.id));
 

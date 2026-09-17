@@ -1,6 +1,10 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      # Build-time, not runtime: changing it in .env means `docker compose build`.
+      args:
+        BASE_PATH: ${BASE_PATH:-}
     ports:
       # HOST_PORT comes from .env via compose's own variable interpolation.
       - '${HOST_PORT:-3000}:3000'
@@ -19,6 +23,8 @@ services:
     build:
       context: .
       target: build
+      args:
+        BASE_PATH: ${BASE_PATH:-}
     profiles:
       - tools
     # Same uid as the runtime image's `node`, or every file these commands create

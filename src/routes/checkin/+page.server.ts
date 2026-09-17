@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { resolve } from '$app/paths';
 import { eq } from 'drizzle-orm';
 import { auth } from '$lib/server/auth';
 import { publishCheckIn } from '$lib/server/check-in-events';
@@ -29,7 +30,7 @@ export const load: PageServerLoad = async (event) => {
 	const hostId = token && verifyBucketToken(token);
 	if (hostId) {
 		event.cookies.set(PRESENCE_COOKIE, issuePresence(hostId), presenceCookieOptions);
-		redirect(302, '/checkin');
+		redirect(302, resolve('/checkin'));
 	}
 
 	return {

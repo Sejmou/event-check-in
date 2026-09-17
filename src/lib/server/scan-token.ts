@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { env } from '$env/dynamic/private';
+import { resolve } from '$app/paths';
 
 /** How long one QR code stays on screen before it rotates. */
 export const BUCKET_MS = 30_000;
@@ -109,7 +110,7 @@ export const PRESENCE_COOKIE = 'checkin_presence';
 export const TICKET_COOKIE = 'checkin_ticket';
 
 export const presenceCookieOptions = {
-	path: '/checkin',
+	path: resolve('/checkin'),
 	httpOnly: true,
 	sameSite: 'lax',
 	maxAge: PRESENCE_MS / 1000
@@ -118,7 +119,7 @@ export const presenceCookieOptions = {
 // Lax, not strict: the scan arrives as a top-level navigation from the camera
 // app, and strict would leave the cookie behind.
 export const ticketCookieOptions = {
-	path: '/checkin',
+	path: resolve('/checkin'),
 	httpOnly: true,
 	sameSite: 'lax',
 	maxAge: TICKET_MS / 1000
