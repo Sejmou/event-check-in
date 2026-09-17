@@ -22,7 +22,7 @@
 	);
 
 	// Every check-in, as it happens, on the screen people are standing in front
-	// of. A link or passkey used by the wrong person shows a name that isn't theirs.
+	// of. A link used by the wrong person shows a name that isn't theirs.
 	$effect(() => {
 		const source = new EventSource(resolve('/admin/checkins/stream'));
 		source.onmessage = (message) => {

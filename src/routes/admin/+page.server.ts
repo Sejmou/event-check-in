@@ -3,7 +3,7 @@ import { asc, eq } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { auth } from '$lib/server/auth';
 import { db } from '$lib/server/db';
-import { passkey, user } from '$lib/server/db/schema';
+import { user } from '$lib/server/db/schema';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async () => {
@@ -12,8 +12,7 @@ export const load: PageServerLoad = async () => {
 			id: user.id,
 			email: user.email,
 			firstName: user.firstName,
-			lastName: user.lastName,
-			passkeys: db.$count(passkey, eq(passkey.userId, user.id))
+			lastName: user.lastName
 		})
 		.from(user)
 		.where(eq(user.role, 'attendee'))

@@ -75,7 +75,7 @@ export function scanId(value: string) {
 }
 
 /**
- * Says "this device may check `userId` in", for guests without a passkey. Handed
+ * Says "this device may check `userId` in" — the only way a guest checks in. Handed
  * out by `/setup` to anyone holding the guest's link, so all that keeps it honest
  * is how short it lives and the check-in screen showing every name that uses one.
  */

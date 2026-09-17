@@ -52,9 +52,10 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * The assertion itself was verified by better-auth's own endpoint when the
-	 * browser called `signIn.passkey`, which mints a fresh session — so requiring
-	 * a session newer than the scan is what proves it just happened here.
+	 * Organizers only: guests have no passkeys (see the README). The assertion
+	 * itself was verified by better-auth's own endpoint when the browser called
+	 * `signIn.passkey`, which mints a fresh session — so requiring a session newer
+	 * than the scan is what proves it just happened here.
 	 */
 	withPasskey: async (event) => {
 		const presence = event.cookies.get(PRESENCE_COOKIE);
@@ -62,21 +63,22 @@ export const actions: Actions = {
 
 		const { user: current, session } = event.locals;
 		if (!current || !session) return fail(403, { message: NOT_FRESH });
+		// A guest passkey registered before guests lost them still signs in. It
+		// doesn't check anyone in, and the session it made ends here.
+		if (current.role !== 'admin') {
+			await auth.api.signOut({ headers: event.request.headers });
+			return fail(403, { message: NO_TICKET });
+		}
 		if (session.createdAt.getTime() < presenceIssuedAt(presence!)) {
 			return fail(403, { message: NOT_FRESH });
 		}
-		// ponytail: an admin's fresh *password* sign-in in another tab would also
-		// land here and be filed as a passkey. Guests have no password, so it can
-		// only mislabel an admin's own row.
+		// ponytail: a fresh *password* sign-in in another tab would also land here
+		// and be filed as a passkey. It can only mislabel an admin's own row.
 		if ((await db.$count(passkey, eq(passkey.userId, current.id))) === 0) {
 			return fail(403, { message: NOT_FRESH });
 		}
 
-		const result = await record(event, current.id, 'passkey', presence!);
-		// The session was only the passkey's receipt. Guests don't stay signed in;
-		// an admin checking in on their own phone does.
-		if (current.role !== 'admin') await auth.api.signOut({ headers: event.request.headers });
-		return result;
+		return record(event, current.id, 'passkey', presence!);
 	}
 };
 
