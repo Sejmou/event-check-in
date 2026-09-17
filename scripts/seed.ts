@@ -102,10 +102,8 @@ async function seedAdmin({ email, firstName, lastName }: Attendee) {
 			firstName,
 			lastName,
 			role: 'admin',
-			// Verified out of band by whoever is running this, and claimed by
-			// definition — an admin sets their own password right here.
-			emailVerified: true,
-			claimedAt: new Date()
+			// Verified out of band by whoever is running this.
+			emailVerified: true
 		},
 		{ method: 'admin' }
 	);
@@ -143,8 +141,7 @@ async function seedAttendees(attendees: Attendee[], file: string) {
 		firstName,
 		lastName,
 		role: 'attendee',
-		emailVerified: false,
-		claimedAt: null
+		emailVerified: false
 	}));
 
 	if (!rows.length) return console.log(`${file} is empty — nothing to seed.`);

@@ -26,8 +26,8 @@ export const checkIn = sqliteTable(
 		checkedInAt: integer('checked_in_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 			.notNull(),
-		// How they proved it was them, not how they signed in earlier.
-		method: text('method', { enum: ['passkey', 'password'] }).notNull(),
+		// How they proved it was them: a passkey, or a ticket from their /setup link.
+		method: text('method', { enum: ['passkey', 'link'] }).notNull(),
 		ipAddress: text('ip_address'),
 		userAgent: text('user_agent'),
 		// Which scan of which displayed code this rode in on.
