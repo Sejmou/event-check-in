@@ -16,6 +16,9 @@ export default defineConfig(({ mode }) => ({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 			adapter: adapter(),
+			// Off here, on in hooks.server.ts: Moodle posts the LTI launch from its
+			// own origin, and SvelteKit can't exempt one route from the check.
+			csrf: { trustedOrigins: ['*'] },
 			paths: {
 				// Baked in at build time, so it comes from the build's environment (or
 				// .env), not the server's. See "Serving under a sub-path" in the README.
@@ -59,6 +62,9 @@ export default defineConfig(({ mode }) => ({
 				test: {
 					name: 'server',
 					environment: 'node',
+					// The database specs share one scratch file and each push the schema
+					// to it first; side by side they would trip over each other.
+					fileParallelism: false,
 					include: ['src/**/*.{test,spec}.{js,ts}'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}

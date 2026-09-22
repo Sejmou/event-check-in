@@ -23,6 +23,9 @@ pnpm db:seed --admin ops@example.com data/attendees.json
 pnpm dev            # or: pnpm dev:tailscale  (needs the tailscale CLI)
 ```
 
+Guests set up their phones from Moodle, which needs the tool registered on both sides —
+see [Moodle](#moodle).
+
 ## Docker
 
 ```sh
@@ -30,6 +33,7 @@ cp .env.example .env      # fill it in, as above
 docker compose build
 docker compose run --rm tools pnpm db:push
 docker compose run --rm tools pnpm db:seed --admin ops@example.com data/attendees.json
+docker compose run --rm tools pnpm lti:register-platform --url https://moodle.example.com --client-id <id>
 docker compose up -d
 ```
 
@@ -99,7 +103,7 @@ compiled into the **build**, so changing it means `pnpm build` or
 | -------------------- | -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`       | yes      | start        | SQLite file path. Compose overrides it to `/data/app.db`                                                                                                                                                                                                                                     |
 | `ORIGIN`             | yes      | start        | Public origin: scheme, host, port — **never a path**, see [below](#serving-under-a-sub-path). adapter-node rejects cross-origin form posts without it, the check-in QR code points at it, organizer passkeys need HTTPS, and its hostname is their relying party (see [Passkeys](#passkeys)) |
-| `BETTER_AUTH_SECRET` | yes      | start        | Also signs the QR, presence and ticket tokens. Changing it invalidates outstanding QR links                                                                                                                                                                                                  |
+| `BETTER_AUTH_SECRET` | yes      | start        | Also signs the QR, presence and enrollment tokens. Changing it invalidates outstanding QR codes and setup links, not set-up phones                                                                                                                                                           |
 | `BASE_PATH`          | no       | **build**    | Sub-path the app is served under, e.g. `/check-in`. See [below](#serving-under-a-sub-path)                                                                                                                                                                                                   |
 | `ADDRESS_HEADER`     | no       | start        | Set to `x-forwarded-for` behind a reverse proxy, or `check_in.ip_address` records the proxy for everyone                                                                                                                                                                                     |
 | `PORT`               | no       | start        | Defaults to 3000. Set in the image, not in `.env`                                                                                                                                                                                                                                            |
@@ -133,22 +137,24 @@ to try a sub-path locally.
 The reverse proxy has to forward requests **with the prefix intact** —
 `/check-in/admin` reaches the app as `/check-in/admin`, not `/admin`. Links, redirects,
 cookie paths, the auth endpoints (`/check-in/api/auth`) and the QR code all include it.
-Personal links become `/check-in/setup?email=…`.
+The Moodle tool URLs become `https://example.com/check-in/lti-link/…`.
 
 ## How guests get in
 
 Guests have no password and never sign in. Accounts are seeded ahead of time, and each
-guest gets a personal link instead: `/setup?email=<their address>`. This app doesn't
-hand the links out. The external tool guests already use opens `/setup` with their
-email in the query string.
+guest proves who they are **once**, through Moodle: the course has a check-in activity
+(an LTI 1.3 "external tool"), and opening it on their phone sets that phone up. From then
+on, scanning the code at the door is all it takes, for as long as the browser keeps what
+the setup stored.
 
 1. `pnpm db:seed --admin <email> attendees.json` seeds the guest list and creates the
    initial admin from it — it prompts for their password. Both arguments are required,
    and `<email>` must appear in the guest list, which is where the admin's name comes
    from. Re-running is safe: existing emails are left alone.
-2. The admin signs in at `/login` with that password, and is prompted to add a passkey
+2. The tool is added to the Moodle course and registered here — see [Moodle](#moodle).
+3. The admin signs in at `/login` with that password, and is prompted to add a passkey
    (skippable; it asks again next sign-in until they do).
-3. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
+4. The admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
    The QR code **rotates every 30 seconds** and stays up indefinitely.
 
 `data/attendees.json` (the `/data` dir is gitignored):
@@ -157,17 +163,72 @@ email in the query string.
 [{ "email": "alice@corp.com", "firstName": "Alice", "lastName": "Ng" }]
 ```
 
+Guests are matched by the email address Moodle reports for them, so the list has to use
+the addresses their Moodle profiles have.
+
+## Setting up a phone
+
+The guest opens the check-in activity in Moodle **on the phone they'll bring**. Moodle
+launches the tool, vouching for who they are, and the tool looks their email up in the
+guest list and sends them to `/lti-link/enroll`. There they tap **Set up this phone**:
+
+1. The browser makes an ECDSA P-256 key pair with WebCrypto, the private half
+   **non-extractable** — scripts on the page can sign with it, but nothing can read it
+   out, not even this app. It is kept in IndexedDB.
+2. It sends the public half, signed with the private half, and the proof of the launch.
+3. The server stores the public key against the guest (`device_key`), replacing any
+   earlier one.
+
+The proof of the launch is an enrollment token: HMAC-signed, naming the guest and the
+Moodle account, and good for 15 minutes. It travels in the URL **fragment**, which
+browsers never send to a server, so it can't end up in a log or a `Referer`, and the page
+takes it out of the address bar as soon as it loads. Setting up a key spends it: a token
+issued before the guest's current key was set up is turned down.
+
+### Things that undo it
+
+The key lives in one browser on one phone. The guest has to open Moodle again if:
+
+- they clear that browser's website data, or used a private window
+- they set up another phone or browser — there is one key per guest, and the old one stops
+  working
+- **Safari deletes it.** WebKit clears script-writable storage, IndexedDB included, for a
+  site the user hasn't visited in seven days. Setting up more than a week before the event
+  may not survive on an iPhone. The setup page asks for persistent storage, but that does
+  not switch this rule off. Ask guests to set up in the last few days, or plan for them
+  redoing it.
+
+The check-in page says so when it finds no key, and redoing it takes a minute.
+
+### Which browser
+
+The key has to be in the browser that opens when the phone's camera reads a QR code —
+usually Safari on an iPhone and Chrome on Android. Two things get in the way:
+
+- **Moodle embedding the tool.** Opened in a frame on Moodle's page, the tool's storage is
+  partitioned under Moodle's site (all current browsers do this for third-party frames),
+  so a key saved there is invisible to the tab a scan opens. The setup page detects the
+  frame and offers a **Continue in a new tab** button, but set the activity to open in a
+  new window (see [Moodle](#moodle)) to avoid the detour.
+- **The Moodle app.** It opens external tools in its own browser view, whose storage
+  isn't the phone's browser's. Guests should use Moodle in the phone's browser for this.
+
+A laptop set up this way works, but nobody scans a QR code with one.
+
 ## Checking in
 
-`/setup` only opens for an email on the guest list, the admin included; anything else is a 404. There a guest taps **Check in now**: the device gets a signed ticket cookie good
-for **30 seconds**. The guest scans the code at the door within that window, in the same
-browser, and `/checkin` redeems the ticket without asking for anything. Once used, it is
-gone. Next time they come in, they open the link again.
+The guest scans the code at the door. `/checkin` records that they saw a live code (the
+presence cookie), then the page signs that scan with the device key and posts it straight
+back — no tapping. The server checks the signature against the stored public key and
+writes the check-in with `method = 'device'`.
 
-Guests can't set up a passkey — see [Why guests have no passkeys](#why-guests-have-no-passkeys).
-The admin can, and may check in with it through "Organizer? Check in with your
-passkey" on `/checkin`, or use their personal link like everyone else. `/setup` hands out a ticket and nothing
-more, so an admin's address there is no more exposed than a guest's.
+What gets signed is `checkin:<scan id>`, the scan's own handle, so a signature is only good
+for the scan it was made for, and the unique index collapses any replay of it. The
+enrollment signs `enroll:<token>` — the prefixes keep a signature made for one from
+passing for the other.
+
+The admin can check in with their passkey through "Organizer? Check in with your
+passkey" on `/checkin`, or set up a device key through Moodle like everyone else.
 
 Every check-in puts a row in `check_in`. Re-entry is normal, so a guest may have several
 rows. A double submit is not: the unique index on `(user_id, scan_id)` collapses
@@ -181,21 +242,38 @@ already did it for them, nothing is added. `expected` on the check-in screen cou
 admins, so they can't push `present` past it.
 
 `host` means "this admin was signed in on the screen showing the code a guest just
-scanned". It is weaker than `link` or `passkey`: nobody confirmed who was standing at
+scanned". It is weaker than `device` or `passkey`: nobody confirmed who was standing at
 that screen, only that one signed in as the admin was showing the code at the door. A
 screen left running, or signed in on someone else's laptop, checks the admin in all
 the same.
 
 ### What stops abuse
 
-Very little up front, on purpose. Anyone holding a guest's link can check that guest in.
-The personal link is the invitation, and it
-should be treated like one.
+Checking a guest in takes their phone — or rather, the key its browser made — plus a code
+seen at the door in the last half-minute. Setting that key up takes their Moodle login.
+Nobody can check a guest in from their email address alone any more.
 
-What catches it is the screen at the door. Every check-in shows up there as it happens,
-as a toast with the guest's name, and the last five stay listed under the code. A name
-appearing that doesn't belong to the person standing in front of the screen is visible
-to everyone in the queue. The toasts come over server-sent events from
+What it does **not** stop:
+
+- **A guest handing over their own check-in.** The server can't tell that a key was made
+  non-extractable: WebCrypto has no attestation, so a guest who calls the enrollment
+  endpoint by hand can register a key they generated themselves and pass it on. It takes
+  deliberate effort, and there is still one key per guest, but it can't be prevented —
+  the same is true of lending someone the phone.
+- **Checking in from elsewhere.** A photo of the code, sent to an absent guest within its
+  30 seconds, checks them in from wherever they are. The address and user agent columns
+  and the door screen are what catch this.
+- **A Moodle account with someone else's email.** Guests are found by the email Moodle
+  reports. Moodle normally makes users confirm a new address by mail, but a site can turn
+  that off, or let users edit their email freely. The first Moodle account to set up a
+  guest is pinned (`device_key.lti_subject`), so an impostor can't take over a guest who
+  already set up — but one who gets there first can. If the Moodle site lets users edit
+  their email, check the log.
+
+What catches the rest is the screen at the door. Every check-in shows up there as it
+happens, as a toast with the guest's name, and the last five stay listed under the code.
+A name appearing that doesn't belong to the person standing in front of the screen is
+visible to everyone in the queue. The toasts come over server-sent events from
 `/admin/checkins/stream`, fanned out in-process, so they reach screens on the same
 server only.
 
@@ -204,9 +282,6 @@ seeing at a glance flagged. `again` is a guest who had already checked in earlie
 `shared` is an address more than one guest checked in from. Neither is wrong on its own
 — people step out for air, and a whole table shares one hotspot — but a code that leaked
 looks like several guests on one address who never passed the door.
-
-Also, `/setup` answers 404 for unknown addresses, so it tells anyone who tries whether an
-address is on the guest list.
 
 ### What the QR code actually proves
 
@@ -221,9 +296,71 @@ signed presence cookie good for 10 minutes, so the code rotating while they conf
 costs them nothing. The cookie carries the admin's ID along, signed, so the check-in
 knows whose screen it came through, and neither token can be moved to another admin.
 
-The ticket from `/setup` is signed with the same secret but binds a user ID and its own
-expiry, and has a prefix of its own, so neither token passes for the other —
+The enrollment token from a Moodle launch is signed with the same secret but has a
+prefix of its own, so neither token passes for the other —
 `src/lib/server/scan-token.spec.ts` pins that down.
+
+## Moodle
+
+The check-in activity is an LTI 1.3 tool, run inside the app by
+[ltijs](https://www.npmjs.com/package/ltijs) rather than as a server of its own. Its
+routes live under `/lti-link`:
+
+| URL                        | What Moodle calls it                            |
+| -------------------------- | ----------------------------------------------- |
+| `<ORIGIN>/lti-link/launch` | Tool URL, and Redirection URI(s)                |
+| `<ORIGIN>/lti-link/login`  | Initiate login URL                              |
+| `<ORIGIN>/lti-link/keys`   | Public keyset URL (Public key type: Keyset URL) |
+
+With a `BASE_PATH`, it goes between `ORIGIN` and `/lti-link`.
+
+1. In the course, go to **More → LTI External tools → Add tool**
+   (`/mod/lti/coursetools.php?id=<course id>`). If there's no button, the Moodle site's
+   admins have to allow course-level tools or add it for you.
+2. Fill in the URLs above, LTI version **LTI 1.3**, and under **Privacy** set
+   **Share launcher's email with tool** to **Always** — without the email, nobody can be
+   matched to the guest list, and the setup page says so. Name is optional, the ID is
+   all ltijs keeps.
+3. Set **Default launch container** to **New window**. Embedded in Moodle's page, the key
+   would land in storage the scanning tab can't see (see [Which browser](#which-browser)).
+4. Save. Moodle then shows a **Client ID**. Register it here:
+
+   ```sh
+   pnpm lti:register-platform --url https://moodle.example.com --client-id <client id>
+   ```
+
+5. Add the tool to the course as an activity. Something like **"Event check-in: set up
+   your phone"** tells guests what it's for — to them it is just a link that opens a page
+   with one button.
+
+`--url` is the Moodle site's base URL exactly as Moodle sends it as the issuer, with no
+trailing slash. The script derives Moodle's auth, token and keyset endpoints from it, and
+re-running it for a registered URL and client ID does nothing.
+
+### How it fits into SvelteKit
+
+ltijs normally starts its own Express server. Here it gets an `HttpHandler` of ours
+(`src/lib/server/lti/http-handler.ts`) that collects its routes, and
+`src/routes/lti-link/[...path]/+server.ts` hands requests to it — one process, one port,
+and `provider.listen()` is never called. Its storage is `DrizzleDatabaseManager`, on the
+app's own better-sqlite3 connection and in the same database file: better-sqlite3 is
+synchronous, so no two writes in the process can interleave, and other processes (the
+seed and register scripts) wait on SQLite's lock as they already did. It shares the
+backups and `db:push`. Its tables are the four `lti_*` ones; `lti_platform` holds the
+tool's private RSA key for each platform, so treat backups accordingly.
+
+Moodle posts the launch from its own origin, which SvelteKit's CSRF check turns away —
+in production only, as `vite dev` skips the check, so it works locally and fails
+deployed. SvelteKit can't exempt a single route, so the check is off in `vite.config.ts`
+and done again in `src/hooks.server.ts`, identically, except for `/lti-link/login` and
+`/lti-link/launch`. Those two are protected by ltijs itself: signed state, a single-use
+nonce, and an id_token signed by Moodle.
+
+`ltijs` is in `dependencies`, not `devDependencies` like everything else: Vite bundles
+dev dependencies into the build, and ltijs finds its HTML templates relative to its own
+files.
+
+`src/lib/server/lti/launch.spec.ts` runs a whole launch against a fake Moodle.
 
 ## Passkeys
 
@@ -239,33 +376,25 @@ before the event.
 
 WebAuthn also needs a **secure context**: HTTPS, or `localhost` exactly. The passkey
 path can't be tested off `localhost` without `tailscale serve` or a real certificate.
+The same goes for guests' device keys: `crypto.subtle` doesn't exist outside a secure
+context, so phones need `ORIGIN` on HTTPS.
 
 ### Why guests have no passkeys
 
-Guests could set up a passkey on `/setup` at one point. That was removed. The goal
-was a credential that stays on the guest's phone, so a passkey couldn't be handed around
-like the link. It doesn't work for guests:
+Guests could set up a passkey at one point. That was removed:
 
 - **Phone passkeys are synced.** A passkey made on an iPhone goes into iCloud Keychain,
   and on Android into Google Password Manager. Both always sync, and so do third-party
-  managers like 1Password. There is no setting to keep one on the device only. A
-  device-bound credential on a phone in practice means a hardware security key, which
-  guests don't carry.
+  managers like 1Password. There is no setting to keep one on the device only.
 - **The site can't ask for a device-bound passkey.** WebAuthn has no option to require
   a passkey that isn't synced. The server only learns whether it is synced (the
-  backup-eligible flag) after the guest has already used their face or fingerprint, so
-  enforcing it would mean rejecting almost every guest after they had done everything
-  right.
+  backup-eligible flag) after the guest has already used their face or fingerprint.
 - **The flag can't be trusted anyway.** The authenticator reports it, and proving it
   would take attestation, which this app doesn't collect.
-- **A synced passkey adds nothing over the link.** It can be shared with anyone on the
-  same Apple or Google account, and whoever can set one up already holds the personal
-  link, which checks the guest in on its own. It also needed extra code: a server-side
-  magic link to give guests a session to register against, and a second check-in path.
 
-So guests have one way in, the 30-second ticket, and abuse is caught by the door screen
-([What stops abuse](#what-stops-abuse)). The admin keeps a passkey: they sign in to the
-admin pages, and there a passkey replaces a password rather than a link.
+The device key does what a passkey was meant to: it stays in one browser. It is no more
+provable than a passkey's flag (see [What stops abuse](#what-stops-abuse)), but it
+doesn't sync, needs no biometric prompt at the door, and can't be copied off by accident.
 
 Guest passkeys registered before the change are still in the `passkey` table. One can
 still sign in, but it doesn't check anyone in, and `/` and `/checkin` end the session.
@@ -277,25 +406,26 @@ delete from passkey where user_id in (select id from user where role = 'attendee
 
 ## Commands
 
-| Command                                          | What it does                                                              |
-| ------------------------------------------------ | ------------------------------------------------------------------------- |
-| `pnpm dev`                                       | Dev server                                                                |
-| `pnpm build` / `pnpm preview`                    | Production build (adapter-node) / preview it                              |
-| `pnpm check`                                     | `svelte-check`                                                            |
-| `pnpm lint` / `pnpm format`                      | Prettier + ESLint                                                         |
-| `pnpm test:unit` / `pnpm test:e2e` / `pnpm test` | Vitest / Playwright / both                                                |
-| `pnpm auth:schema`                               | Regenerate `src/lib/server/db/auth.schema.ts` from the better-auth config |
-| `pnpm db:push`                                   | Apply the schema straight to the DB (no migration files)                  |
-| `pnpm db:backup` / `pnpm db:restore`             | Snapshot the DB, and put a snapshot back (see [Backups](#backups))        |
-| `pnpm db:seed`                                   | Seed the initial admin and the guest list                                 |
-| `pnpm db:generate` / `pnpm db:migrate`           | Generate / apply migration files                                          |
-| `pnpm db:studio`                                 | Drizzle Studio                                                            |
+| Command                                          | What it does                                                                 |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `pnpm dev`                                       | Dev server                                                                   |
+| `pnpm build` / `pnpm preview`                    | Production build (adapter-node) / preview it                                 |
+| `pnpm check`                                     | `svelte-check`                                                               |
+| `pnpm lint` / `pnpm format`                      | Prettier + ESLint                                                            |
+| `pnpm test:unit` / `pnpm test:e2e` / `pnpm test` | Vitest / Playwright / both                                                   |
+| `pnpm auth:schema`                               | Regenerate `src/lib/server/db/auth.schema.ts` from the better-auth config    |
+| `pnpm db:push`                                   | Apply the schema straight to the DB (no migration files)                     |
+| `pnpm db:backup` / `pnpm db:restore`             | Snapshot the DB, and put a snapshot back (see [Backups](#backups))           |
+| `pnpm db:seed`                                   | Seed the initial admin and the guest list                                    |
+| `pnpm lti:register-platform`                     | Register a Moodle site's client ID with the LTI tool (see [Moodle](#moodle)) |
+| `pnpm db:generate` / `pnpm db:migrate`           | Generate / apply migration files                                             |
+| `pnpm db:studio`                                 | Drizzle Studio                                                               |
 
 `pnpm auth:schema` needs `DATABASE_URL` set, because it loads `src/lib/server/auth.ts`,
 which imports the db client. After changing the better-auth config, run `auth:schema`
 then `db:push`.
 
-`pnpm db:seed` runs through `scripts/run.js`, a five-line Vite SSR loader. Node can't
+`pnpm db:seed` and `pnpm lti:register-platform` run through `scripts/run.js`, a five-line Vite SSR loader. Node can't
 resolve SvelteKit's `$env/*` and `$lib/*` aliases on its own and SvelteKit ships no
 script runner, so the seed script would otherwise need its own copy of the auth config.
 
@@ -342,8 +472,9 @@ Two things that follow from this:
 
 ## Schema notes
 
-Everything outside the log lives on better-auth's own tables. The only addition is one
-column on `user`, declared in `src/lib/server/auth.ts` as an `additionalField` with
+Besides the log, `device_key` (see [Setting up a phone](#setting-up-a-phone)) and ltijs's
+`lti_*` tables (see [Moodle](#moodle)), everything lives on better-auth's own tables. The
+only addition there is one column on `user`, declared in `src/lib/server/auth.ts` as an `additionalField` with
 `input: false` so nobody can set it on themselves:
 
 - `role` — `attendee` or `admin`. Named `role` rather than `is_admin` so adopting
@@ -353,11 +484,12 @@ Deliberately absent:
 
 - No summary or attendance table — the log page derives its counts from `check_in` on
   each load, and a stored total can only drift from the rows it claims to count.
-- No invite or setup-token table — the link is the email itself, a seeded row goes
-  straight into `user`, and the `UNIQUE` constraint on email is the dedupe.
-- No QR or ticket table — both are signed and carry their own expiry (see above).
-- No `auth_method` column on `user` — guests all have the link, and an admin's `passkey`
-  row already says what they have.
+- No invite table — a seeded row goes straight into `user`, and the `UNIQUE` constraint
+  on email is the dedupe.
+- No QR or enrollment-token table — both are signed and carry their own expiry (see
+  above). An enrollment is spent by the key it sets up, through `device_key.created_at`.
+- No `auth_method` column on `user` — a guest's `device_key` row, and an admin's
+  `passkey` row, already say what they have.
   `check_in.method` is a different thing: what was used at one moment, which is history
   and cannot drift.
 - No "has the admin added a passkey" column — that is the `passkey` table.
@@ -366,12 +498,12 @@ Deliberately absent:
 
 The one table that is ours. One row per check-in:
 
-| Column                     | Why it's there                                                                                                             |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `user_id`, `checked_in_at` | who and when                                                                                                               |
-| `method`                   | `link` (a ticket from `/setup`), `passkey` (admins only), or `host` (see below), as verified server-side at that moment    |
-| `ip_address`, `user_agent` | a code photographed and passed around shows up as check-ins from addresses that aren't the venue's                         |
-| `scan_id`                  | a non-secret handle for one scan; one device working through borrowed accounts shows up as one `scan_id` across many users |
+| Column                     | Why it's there                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `user_id`, `checked_in_at` | who and when                                                                                                                                                 |
+| `method`                   | `device` (the phone's key), `passkey` (admins only), or `host` (see below), as verified server-side at that moment. `link` is from the removed `/setup` link |
+| `ip_address`, `user_agent` | a code photographed and passed around shows up as check-ins from addresses that aren't the venue's                                                           |
+| `scan_id`                  | a non-secret handle for one scan; one device working through borrowed accounts shows up as one `scan_id` across many users                                   |
 
 `method = 'host'` marks the admin who was signed in on the check-in screen, checked in
 automatically when the first guest got in through their code. It has no `ip_address`

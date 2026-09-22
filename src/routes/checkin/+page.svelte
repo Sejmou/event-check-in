@@ -1,21 +1,35 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { authClient } from '$lib/auth-client';
+	import { checkInMessage, loadDeviceKey, sign } from '$lib/device-key';
 	import type { ActionData, PageServerData } from './$types';
 
 	let { data, form }: { data: PageServerData; form: ActionData } = $props();
 
 	let passkeyError = $state('');
 	let confirming = $state(false);
+	// null until this browser has looked for its key.
+	let hasDeviceKey = $state<boolean | null>(null);
+	let keyId = $state('');
+	let signature = $state('');
 
 	const checkedIn = $derived(form && 'checkedIn' in form ? form.checkedIn : null);
 
-	// A ticket from /setup needs no further input, so hand it straight back.
-	// Posted rather than redeemed in load, so a GET never writes a check-in.
+	// A set-up phone needs no further input: sign this scan and hand it straight
+	// back. Posted rather than redeemed in load, so a GET never writes a check-in.
 	$effect(() => {
-		if (data.present && data.hasTicket && !form) {
-			document.forms.namedItem('withTicket')?.requestSubmit();
-		}
+		const scan = data.scanId;
+		if (!scan || form) return;
+		void (async () => {
+			const key = await loadDeviceKey().catch(() => undefined);
+			hasDeviceKey = Boolean(key);
+			if (!key) return;
+			keyId = key.keyId;
+			signature = await sign(key.privateKey, checkInMessage(scan));
+			await tick();
+			document.forms.namedItem('withDeviceKey')?.requestSubmit();
+		})();
 	});
 
 	async function confirmWithPasskey() {
@@ -40,24 +54,26 @@
 		<p class="text-gray-600">
 			Welcome, {checkedIn}. Enjoy the event.
 		</p>
-	{:else if !data.present}
+	{:else if !data.scanId}
 		<h1 class="text-2xl font-semibold">Scan the code at the door</h1>
 		<p class="text-gray-600">
 			This page opens when you scan the QR code on the check-in screen. The code changes every 30
 			seconds, so scan the one showing now.
 		</p>
-	{:else if data.hasTicket && !form}
+	{:else if hasDeviceKey !== false && !form}
 		<h1 class="text-2xl font-semibold">Checking you in…</h1>
-		<form method="post" action="?/withTicket" name="withTicket" use:enhance>
-			<noscript>
-				<button class="rounded-md bg-blue-600 px-4 py-2 text-white">Check in</button>
-			</noscript>
+		<form method="post" action="?/withDeviceKey" name="withDeviceKey" use:enhance>
+			<input type="hidden" name="keyId" value={keyId} />
+			<input type="hidden" name="signature" value={signature} />
 		</form>
+	{:else if hasDeviceKey}
+		<!-- The key was there and was turned down; the message below says why. -->
+		<h1 class="text-2xl font-semibold">That didn't work</h1>
 	{:else}
-		<h1 class="text-2xl font-semibold">Open your personal link</h1>
+		<h1 class="text-2xl font-semibold">Set up this phone first</h1>
 		<p class="text-gray-600">
-			Open the personal link from your invitation, tap "Check in now", and scan the code again
-			within 30 seconds.
+			Open the check-in activity in your Moodle course on this phone and tap "Set up this phone".
+			Then scan the code again.
 		</p>
 		<button
 			type="button"

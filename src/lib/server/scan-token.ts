@@ -11,8 +11,11 @@ export const BUCKET_MS = 30_000;
  */
 const PRESENCE_MS = 10 * 60_000;
 
-/** How long a ticket from `/setup` stays good for. The whole window to go and scan. */
-export const TICKET_MS = 30_000;
+/**
+ * How long the link from a Moodle launch stays good for setting up a browser.
+ * Room to open it in a new tab, or on the phone, and tap the button.
+ */
+export const ENROLLMENT_MS = 15 * 60_000;
 
 function hmac(message: string) {
 	// better-auth refuses to start without it, so this only fires if that ever
@@ -87,40 +90,47 @@ export function scanId(value: string) {
 	return value.split('.')[2].slice(0, 16);
 }
 
+export type Enrollment = {
+	userId: string;
+	/** `iss` and `sub` of the Moodle account that launched. See `deviceKey.ltiSubject`. */
+	ltiSubject: string;
+	/** Only so the setup page can greet them; the server never reads it back. */
+	firstName: string;
+	issuedAt: number;
+};
+
 /**
- * Says "this device may check `userId` in" — the only way a guest checks in. Handed
- * out by `/setup` to anyone holding the guest's link, so all that keeps it honest
- * is how short it lives and the check-in screen showing every name that uses one.
+ * Says "a Moodle launch just proved this is `userId`", for the setup page to
+ * turn into a device key. Travels in the URL fragment, so it is never sent to
+ * a server or logged, and one key set up after `issuedAt` spends it — see
+ * `enroll` in `/lti-link/enroll`.
  */
-export function issueTicket(userId: string, at = Date.now()) {
-	const expiresAt = at + TICKET_MS;
-	return `${userId}.${expiresAt}.${hmac(`ticket:${userId}:${expiresAt}`)}`;
+export function issueEnrollment(enrollment: Omit<Enrollment, 'issuedAt'>, at = Date.now()) {
+	const payload = Buffer.from(JSON.stringify({ ...enrollment, issuedAt: at })).toString(
+		'base64url'
+	);
+	return `${payload}.${hmac(`enroll:${payload}`)}`;
 }
 
-/** The user the ticket is for, or null if it is expired or not ours. */
-export function verifyTicket(value: string | undefined, at = Date.now()) {
+/** What the enrollment says, or null if it is expired or not ours. */
+export function verifyEnrollment(value: string | undefined, at = Date.now()) {
 	if (!value) return null;
-	const [userId, expiresAt, signature] = value.split('.');
-	if (!userId || !expiresAt || !signature) return null;
-	if (!/^\d+$/.test(expiresAt) || Number(expiresAt) < at) return null;
-	return equals(signature, hmac(`ticket:${userId}:${expiresAt}`)) ? userId : null;
+	const [payload, signature, extra] = value.split('.');
+	if (!payload || !signature || extra !== undefined) return null;
+	if (!equals(signature, hmac(`enroll:${payload}`))) return null;
+
+	const enrollment: Enrollment = JSON.parse(Buffer.from(payload, 'base64url').toString());
+	if (enrollment.issuedAt + ENROLLMENT_MS < at) return null;
+	return enrollment;
 }
 
 export const PRESENCE_COOKIE = 'checkin_presence';
-export const TICKET_COOKIE = 'checkin_ticket';
 
+// Lax, not strict: the scan arrives as a top-level navigation from the camera
+// app, and strict would leave the cookie behind.
 export const presenceCookieOptions = {
 	path: resolve('/checkin'),
 	httpOnly: true,
 	sameSite: 'lax',
 	maxAge: PRESENCE_MS / 1000
-} as const;
-
-// Lax, not strict: the scan arrives as a top-level navigation from the camera
-// app, and strict would leave the cookie behind.
-export const ticketCookieOptions = {
-	path: resolve('/checkin'),
-	httpOnly: true,
-	sameSite: 'lax',
-	maxAge: TICKET_MS / 1000
 } as const;

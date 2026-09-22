@@ -1,15 +1,15 @@
 import { expect, test } from 'vitest';
 import {
 	BUCKET_MS,
-	TICKET_MS,
+	ENROLLMENT_MS,
 	bucketToken,
+	issueEnrollment,
 	issuePresence,
-	issueTicket,
 	presenceIssuedAt,
 	scanId,
 	verifyBucketToken,
-	verifyPresence,
-	verifyTicket
+	verifyEnrollment,
+	verifyPresence
 } from './scan-token';
 
 test('a code is accepted for its own window and the one before it, and names its host', () => {
@@ -71,23 +71,33 @@ test('a scan reports when it happened and gets a handle that is not the token', 
 	expect(verifyPresence(scanId(presence), now)).toBeNull();
 });
 
-test('a ticket names its guest for 30 seconds and no longer', () => {
-	const now = Date.now();
-	const ticket = issueTicket('ada', now);
+const ada = { userId: 'ada', ltiSubject: '["https://moodle.example","42"]', firstName: 'Ada' };
 
-	expect(verifyTicket(ticket, now + TICKET_MS - 1)).toBe('ada');
-	expect(verifyTicket(ticket, now + TICKET_MS + 1)).toBeNull();
+test('an enrollment says who launched, for 15 minutes and no longer', () => {
+	const now = Date.now();
+	const token = issueEnrollment(ada, now);
+
+	expect(verifyEnrollment(token, now + ENROLLMENT_MS - 1)).toEqual({ ...ada, issuedAt: now });
+	expect(verifyEnrollment(token, now + ENROLLMENT_MS + 1)).toBeNull();
 });
 
-test('a ticket cannot be moved to another guest or stretched', () => {
+test('an enrollment cannot be moved to another guest or stretched', () => {
 	const now = Date.now();
-	const [, expiresAt, signature] = issueTicket('ada', now).split('.');
+	const [, signature] = issueEnrollment(ada, now).split('.');
+	const forge = (fields: object) =>
+		`${Buffer.from(JSON.stringify({ ...ada, issuedAt: now, ...fields })).toString('base64url')}.${signature}`;
 
-	expect(verifyTicket(`grace.${expiresAt}.${signature}`, now)).toBeNull();
-	expect(verifyTicket(`ada.${Number(expiresAt) + 60_000}.${signature}`, now)).toBeNull();
-	// Nor does a presence token pass for one.
-	expect(verifyTicket(issuePresence('ada', now), now)).toBeNull();
-	// ...or a ticket for presence.
-	expect(verifyPresence(issueTicket('ada', now), now)).toBeNull();
-	expect(verifyTicket(undefined)).toBeNull();
+	expect(verifyEnrollment(forge({ userId: 'grace' }), now)).toBeNull();
+	expect(verifyEnrollment(forge({ issuedAt: now + 60_000 }), now)).toBeNull();
+	expect(
+		verifyEnrollment(forge({ ltiSubject: '["https://moodle.example","43"]' }), now)
+	).toBeNull();
+	expect(verifyEnrollment(undefined)).toBeNull();
+	expect(verifyEnrollment('garbage')).toBeNull();
+});
+
+test('an enrollment and a presence never pass for each other', () => {
+	const now = Date.now();
+	expect(verifyPresence(issueEnrollment(ada, now), now)).toBeNull();
+	expect(verifyEnrollment(issuePresence('ada', now), now)).toBeNull();
 });

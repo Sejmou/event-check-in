@@ -19,6 +19,7 @@
 		"test:e2e": "playwright install && playwright test",
 		"db:push": "drizzle-kit push",
 		"db:seed": "node scripts/run.js scripts/seed.ts",
+		"lti:register-platform": "node scripts/run.js scripts/register-platform.ts",
 		"db:backup": "node --env-file-if-exists=.env scripts/backup.js",
 		"db:restore": "node --env-file-if-exists=.env scripts/restore.js",
 		"db:generate": "drizzle-kit generate",
@@ -73,7 +74,8 @@
 		"vitest-browser-svelte": "^2.1.1"
 	},
 	"dependencies": {
-		"better-sqlite3": "^13.0.2"
+		"better-sqlite3": "^13.0.2",
+		"ltijs": "^7.0.6"
 	},
 	"lint-staged": {
 		"*": "prettier --write --ignore-unknown"
