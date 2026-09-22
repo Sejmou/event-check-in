@@ -8,6 +8,7 @@ import { checkInHost } from '$lib/server/check-in-host';
 import { db } from '$lib/server/db';
 import { checkIn, deviceKey, passkey, user } from '$lib/server/db/schema';
 import { verifySignature } from '$lib/server/device-key';
+import { isAdmin } from '$lib/server/roles';
 import {
 	issuePresence,
 	PRESENCE_COOKIE,
@@ -89,7 +90,7 @@ export const actions: Actions = {
 		if (!current || !session) return fail(403, { message: NOT_FRESH });
 		// A guest passkey registered before guests lost them still signs in. It
 		// doesn't check anyone in, and the session it made ends here.
-		if (current.role !== 'admin') {
+		if (!isAdmin(current)) {
 			await auth.api.signOut({ headers: event.request.headers });
 			return fail(403, { message: NOT_SET_UP });
 		}

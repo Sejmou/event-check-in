@@ -19,6 +19,9 @@ export const user = sqliteTable("user", {
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   role: text("role").default("attendee"),
+  mustChangePassword: integer("must_change_password", {
+    mode: "boolean",
+  }).default(false),
 });
 
 export const session = sqliteTable(

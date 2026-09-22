@@ -11,6 +11,7 @@ import { passkey } from '@better-auth/passkey';
 import { getRequestEvent } from '$app/server';
 import { db } from '$lib/server/db';
 import { user } from '$lib/server/db/schema';
+import { hasAdminRole } from '$lib/server/roles';
 
 export const auth = betterAuth({
 	// ORIGIN is scheme and host only. better-auth would take any path on it as the
@@ -24,7 +25,8 @@ export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: 'sqlite' }),
 	// Sign-in stays on for the admin password; guests never get one.
 	// disableSignUp closes /sign-up/email AND auth.api.signUpEmail — accounts only
-	// come from the seed script.
+	// come from the seed script, and passwords from it or a superadmin promoting a
+	// guest on /admin.
 	emailAndPassword: { enabled: true, disableSignUp: true },
 	user: {
 		additionalFields: {
@@ -33,7 +35,16 @@ export const auth = betterAuth({
 			// better-auth hardcodes `name` on the user model and can't drop it.
 			// Demoted to a nullable derived column; callers set it from the two above.
 			name: { type: 'string', required: false, input: false },
-			role: { type: 'string', required: false, input: false, defaultValue: 'attendee' }
+			// attendee, admin or superadmin — see $lib/server/roles.
+			role: { type: 'string', required: false, input: false, defaultValue: 'attendee' },
+			// Set when a superadmin promotes someone with a password they chose. The
+			// admin layout holds the new admin on /admin/change-password until it's cleared.
+			mustChangePassword: {
+				type: 'boolean',
+				required: false,
+				input: false,
+				defaultValue: false
+			}
 		}
 	},
 	plugins: [
@@ -48,7 +59,7 @@ export const auth = betterAuth({
 			// a leftover guest passkey signs in and calls the endpoint directly.
 			registration: {
 				afterVerification: async ({ user: registering }) => {
-					const admin = and(eq(user.id, registering.id), eq(user.role, 'admin'));
+					const admin = and(eq(user.id, registering.id), hasAdminRole());
 					if ((await db.$count(user, admin)) === 0) {
 						throw new APIError('FORBIDDEN', { message: 'Only organizers can add a passkey.' });
 					}

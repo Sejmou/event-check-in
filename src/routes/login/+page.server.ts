@@ -2,10 +2,11 @@ import { fail, redirect } from '@sveltejs/kit';
 import { resolve } from '$app/paths';
 import { APIError } from 'better-auth/api';
 import { auth } from '$lib/server/auth';
+import { isAdmin } from '$lib/server/roles';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = (event) => {
-	if (event.locals.user?.role === 'admin') redirect(302, resolve('/admin'));
+	if (isAdmin(event.locals.user)) redirect(302, resolve('/admin'));
 	return {};
 };
 
