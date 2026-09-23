@@ -367,6 +367,17 @@ With a `BASE_PATH`, it goes between `ORIGIN` and `/lti-link`.
 trailing slash. The script derives Moodle's auth, token and keyset endpoints from it, and
 re-running it for a registered URL and client ID does nothing.
 
+### Courses
+
+For now, the tool ignores which course a launch comes from. Everyone who opens the
+activity through a registered tool can set up a phone, whatever course the tool sits
+in. We only use it in one course.
+
+Every launch does say which course it came from: the `context` claim in the `id_token`,
+whose `id` is Moodle's course ID (unique only together with `iss`). Later features
+could use it to track attendance per course: remembering which course each guest set
+up from, and splitting the log, the door screens and the counts by course.
+
 ### How it fits into SvelteKit
 
 ltijs normally starts its own Express server. Here it gets an `HttpHandler` of ours
