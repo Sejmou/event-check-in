@@ -12,13 +12,11 @@ export const load: PageServerLoad = async (event) => {
 	// The admin layout already turned away anyone who isn't one.
 	checkinUrl.searchParams.set('t', bucketToken(event.locals.user!.id));
 
-	const [qr, [{ present }], expected, recent] = await Promise.all([
+	const [qr, [{ present }], recent] = await Promise.all([
 		// Rendered here rather than in the browser so the page needs no QR library.
 		QRCode.toString(checkinUrl.toString(), { type: 'svg', margin: 1, width: 420 }),
 		// Distinct: re-entry writes another row, and the headline number is people.
 		db.select({ present: countDistinct(checkIn.userId) }).from(checkIn),
-		// Everyone on the list, admins included: they check in too.
-		db.$count(user),
 		db
 			.select({
 				id: checkIn.id,
@@ -32,5 +30,7 @@ export const load: PageServerLoad = async (event) => {
 			.limit(5)
 	]);
 
-	return { qr, present, expected, recent, msUntilNextBucket: msUntilNextBucket() };
+	// No "of how many": there is no guest list, only whoever has opened the
+	// Moodle activity so far, which says nothing about who is coming.
+	return { qr, present, recent, msUntilNextBucket: msUntilNextBucket() };
 };

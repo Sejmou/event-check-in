@@ -18,7 +18,8 @@ services:
 
   # Dev-dependency image for one-off schema and seed runs against the same volume:
   #   docker compose run --rm tools pnpm db:push
-  #   docker compose run --rm tools pnpm db:seed --admin ops@corp.com data/attendees.json
+  #   docker compose run --rm tools pnpm db:seed --admin ops@corp.com --first-name Ada --last-name Lovelace
+  #   docker compose run --rm tools pnpm lti:register-platform --url https://moodle.example.com --client-id <id>
   tools:
     build:
       context: .
@@ -36,8 +37,6 @@ services:
       DATABASE_URL: /data/app.db
     volumes:
       - db:/data
-      # The image has no data/ (.dockerignore), so the seed list comes from the host.
-      - ./data:/app/data:ro
 
 volumes:
   db:

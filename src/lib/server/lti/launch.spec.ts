@@ -1,7 +1,7 @@
 import { beforeAll, expect, test } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { createSign, generateKeyPairSync } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, like } from 'drizzle-orm';
 import { IdTokenValidationMethod } from 'ltijs';
 import { env } from '$env/dynamic/private';
 import { checkInMessage, enrollMessage } from '$lib/device-key';
@@ -17,9 +17,10 @@ const MOODLE = 'https://moodle.test';
 const CLIENT_ID = 'check-in-tool';
 const TOOL = 'http://localhost:5173/lti-link';
 const GUEST = 'lti-guest@example.com';
+/** Held by an account that never launched, like the seeded superadmin. */
+const TAKEN = 'lti-taken@example.com';
+const ADA = JSON.stringify([MOODLE, '42']);
 const platformKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
-
-let guestId: string;
 
 beforeAll(async () => {
 	// See auth.spec.ts.
@@ -28,11 +29,21 @@ beforeAll(async () => {
 		env: { ...process.env, DATABASE_URL: env.DATABASE_URL }
 	});
 	db.delete(ltiPlatform).where(eq(ltiPlatform.url, MOODLE)).run();
-	db.delete(user).where(eq(user.email, GUEST)).run();
+	db.delete(user)
+		.where(like(user.ltiSubject, `["${MOODLE}"%`))
+		.run();
+	db.delete(user)
+		.where(inArray(user.email, [GUEST, TAKEN]))
+		.run();
 
-	guestId = crypto.randomUUID();
 	db.insert(user)
-		.values({ id: guestId, email: GUEST, firstName: 'Ada', lastName: 'Lovelace', role: 'attendee' })
+		.values({
+			id: crypto.randomUUID(),
+			email: TAKEN,
+			firstName: 'Olga',
+			lastName: 'Ops',
+			role: 'superadmin'
+		})
 		.run();
 
 	await provider.platformManager.registerPlatform({
@@ -87,6 +98,8 @@ function idToken(nonce: string, claims: Record<string, unknown> = {}) {
 		exp: now + 60,
 		nonce,
 		email: 'LTI-Guest@example.com',
+		given_name: 'Ada',
+		family_name: 'Lovelace',
 		[`${lti}/version`]: '1.3.0',
 		[`${lti}/deployment_id`]: '1',
 		[`${lti}/roles`]: [],
@@ -145,13 +158,26 @@ function tokenFrom(response: Response | null) {
 	return location.hash.slice(1);
 }
 
-test('a launch sends the guest Moodle vouched for on to set up their phone', async () => {
+const guest = () => db.select().from(user).where(eq(user.ltiSubject, ADA)).get();
+
+test('a first launch creates the guest from what Moodle says about them', async () => {
 	const enrollment = verifyEnrollment(tokenFrom(await launch()));
-	expect(enrollment).toMatchObject({
-		userId: guestId,
+
+	expect(guest()).toMatchObject({
+		email: GUEST,
 		firstName: 'Ada',
-		ltiSubject: JSON.stringify([MOODLE, '42'])
+		lastName: 'Lovelace',
+		role: 'attendee'
 	});
+	expect(enrollment).toMatchObject({ userId: guest()!.id, firstName: 'Ada' });
+});
+
+test('later launches find the same guest by Moodle account, whatever the email says now', async () => {
+	const { id } = guest()!;
+	const enrollment = verifyEnrollment(tokenFrom(await launch({ email: 'ada@new.example' })));
+
+	expect(enrollment?.userId).toBe(id);
+	expect(await db.$count(user, eq(user.ltiSubject, ADA))).toBe(1);
 });
 
 test('an id_token is good for one launch', async () => {
@@ -178,12 +204,22 @@ test('an id_token not signed by the platform is turned down', async () => {
 	expect(response?.headers.get('location')).toBeNull();
 });
 
-test('someone off the guest list, or without an email, is told so', async () => {
-	const off = await launch({ email: 'stranger@example.com' });
-	expect(off?.headers.get('location')).toBe('/lti-link/enroll?problem=not-invited');
+test('a new guest Moodle shares no email or name for is told so, and not created', async () => {
+	for (const missing of [{ email: undefined }, { given_name: undefined }, { family_name: '' }]) {
+		const response = await launch({ sub: 'private', ...missing });
+		expect(response?.headers.get('location')).toBe('/lti-link/enroll?problem=no-profile');
+	}
+	expect(await db.$count(user, eq(user.ltiSubject, JSON.stringify([MOODLE, 'private'])))).toBe(0);
+});
 
-	const hidden = await launch({ email: undefined });
-	expect(hidden?.headers.get('location')).toBe('/lti-link/enroll?problem=no-email');
+test("an email some other account already has isn't linked to it", async () => {
+	// A newcomer, and Ada's Moodle account under a second ID alike.
+	for (const sub of ['olga-in-moodle', '666']) {
+		const response = await launch({ sub, email: TAKEN });
+		expect(response?.headers.get('location')).toBe('/lti-link/enroll?problem=email-taken');
+	}
+	const olga = db.select().from(user).where(eq(user.email, TAKEN)).get();
+	expect(olga?.ltiSubject).toBeNull();
 });
 
 test('setting up stores a key that then checks the guest in, once per launch', async () => {
@@ -191,7 +227,7 @@ test('setting up stores a key that then checks the guest in, once per launch', a
 	const { privateKey, result } = await enroll(token);
 	expect(result).toMatchObject({ keyId: expect.any(String) });
 
-	const stored = db.select().from(deviceKey).where(eq(deviceKey.userId, guestId)).get()!;
+	const stored = db.select().from(deviceKey).where(eq(deviceKey.userId, guest()!.id)).get()!;
 	const signature = await crypto.subtle.sign(
 		{ name: 'ECDSA', hash: 'SHA-256' },
 		privateKey,
@@ -206,13 +242,14 @@ test('setting up stores a key that then checks the guest in, once per launch', a
 	expect((await enroll(token)).result).toMatchObject({ status: 403 });
 });
 
-test('another Moodle account with the same email cannot take the guest over', async () => {
+test('setting up again replaces the key, and the old one stops working', async () => {
 	await enroll(tokenFrom(await launch()));
-	const before = db.select().from(deviceKey).where(eq(deviceKey.userId, guestId)).get();
+	const before = db.select().from(deviceKey).where(eq(deviceKey.userId, guest()!.id)).get()!;
 
-	const { result } = await enroll(tokenFrom(await launch({ sub: '666' })));
-	expect(result).toMatchObject({ status: 403 });
-	expect(db.select().from(deviceKey).where(eq(deviceKey.userId, guestId)).get()).toEqual(before);
+	await enroll(tokenFrom(await launch()));
+	const after = db.select().from(deviceKey).where(eq(deviceKey.userId, guest()!.id)).get()!;
+	expect(after.id).not.toBe(before.id);
+	expect(await db.$count(deviceKey, eq(deviceKey.id, before.id))).toBe(0);
 });
 
 test('a public key without proof of its private half is refused', async () => {

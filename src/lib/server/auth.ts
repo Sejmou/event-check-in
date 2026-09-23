@@ -24,9 +24,9 @@ export const auth = betterAuth({
 	secret: building ? 'build-time-placeholder' : env.BETTER_AUTH_SECRET,
 	database: drizzleAdapter(db, { provider: 'sqlite' }),
 	// Sign-in stays on for the admin password; guests never get one.
-	// disableSignUp closes /sign-up/email AND auth.api.signUpEmail — accounts only
-	// come from the seed script, and passwords from it or a superadmin promoting a
-	// guest on /admin.
+	// disableSignUp closes /sign-up/email AND auth.api.signUpEmail — guests only
+	// come from Moodle launches and the superadmin from the seed script, and
+	// passwords from it or a superadmin promoting a guest on /admin.
 	emailAndPassword: { enabled: true, disableSignUp: true },
 	user: {
 		additionalFields: {
@@ -37,6 +37,10 @@ export const auth = betterAuth({
 			name: { type: 'string', required: false, input: false },
 			// attendee, admin or superadmin — see $lib/server/roles.
 			role: { type: 'string', required: false, input: false, defaultValue: 'attendee' },
+			// The Moodle account (`["<iss>","<sub>"]`) a guest was created from on their
+			// first launch — how every later launch finds them. Empty for the seeded
+			// superadmin. See $lib/server/lti/provider.
+			ltiSubject: { type: 'string', required: false, input: false, unique: true },
 			// Set when a superadmin promotes someone with a password they chose. The
 			// admin layout holds the new admin on /admin/change-password until it's cleared.
 			mustChangePassword: {

@@ -15,11 +15,11 @@ Fill in `.env`:
 - `ORIGIN` — public origin, e.g. `http://localhost:5173` — no path, even under a sub-path (see [Serving under a sub-path](#serving-under-a-sub-path))
 - `BETTER_AUTH_SECRET` — `openssl rand -base64 32`
 
-Create the tables, then seed the superadmin and the guest list:
+Create the tables, then create the superadmin:
 
 ```sh
 pnpm db:push
-pnpm db:seed --admin ops@example.com data/attendees.json
+pnpm db:seed --admin ops@example.com --first-name Olga --last-name Ops
 pnpm dev            # or: pnpm dev:tailscale  (needs the tailscale CLI)
 ```
 
@@ -32,7 +32,7 @@ see [Moodle](#moodle).
 cp .env.example .env      # fill it in, as above
 docker compose build
 docker compose run --rm tools pnpm db:push
-docker compose run --rm tools pnpm db:seed --admin ops@example.com data/attendees.json
+docker compose run --rm tools pnpm db:seed --admin ops@example.com --first-name Olga --last-name Ops
 docker compose run --rm tools pnpm lti:register-platform --url https://moodle.example.com --client-id <id>
 docker compose up -d
 ```
@@ -141,16 +141,15 @@ The Moodle tool URLs become `https://example.com/check-in/lti-link/…`.
 
 ## How guests get in
 
-Guests have no password and never sign in. Accounts are seeded ahead of time, and each
-guest proves who they are **once**, through Moodle: the course has a check-in activity
-(an LTI 1.3 "external tool"), and opening it on their phone sets that phone up. From then
-on, scanning the code at the door is all it takes, for as long as the browser keeps what
-the setup stored.
+Guests have no password and never sign in, and there is no guest list. The course has a
+check-in activity (an LTI 1.3 "external tool"): opening it proves who someone is, through
+Moodle, and makes them a guest on the spot — anyone who can open the activity can come
+in. Opening it on their phone also sets that phone up. From then on, scanning the code at
+the door is all it takes, for as long as the browser keeps what the setup stored.
 
-1. `pnpm db:seed --admin <email> attendees.json` seeds the guest list and creates the
-   superadmin from it — it prompts for their password. Both arguments are required,
-   and `<email>` must appear in the guest list, which is where the superadmin's name
-   comes from. Re-running is safe: existing emails are left alone.
+1. `pnpm db:seed --admin <email> --first-name <first> --last-name <last>` creates the
+   superadmin — it prompts for their password. Re-running is safe: an existing email is
+   left alone.
 2. The tool is added to the Moodle course and registered here — see [Moodle](#moodle).
 3. The superadmin signs in at `/login` with that password, and is prompted to add a
    passkey (skippable; it asks again next sign-in until they do).
@@ -159,14 +158,28 @@ the setup stored.
 5. An admin opens `/admin/generate-checkin-qr` and leaves it on a screen at the door.
    The QR code **rotates every 30 seconds** and stays up indefinitely.
 
-`data/attendees.json` (the `/data` dir is gitignored):
+A guest is created on their first launch, with the name and email Moodle shares, and
+found again on every later one by their Moodle account: `user.lti_subject`, the
+launch's issuer and user ID (`iss` and `sub`). Not by email — a Moodle user may be able
+to change theirs, and the ID never changes. Moodle's roles are ignored: whoever opens
+the activity is a guest, and who is an organizer is decided here (below), not in
+Moodle.
 
-```json
-[{ "email": "alice@corp.com", "firstName": "Alice", "lastName": "Ng" }]
+A launch whose email already belongs to an account that isn't linked to that Moodle
+account — the seeded superadmin, most likely — is turned away rather than linked to it
+("email-taken" on the setup page). Linking by email is exactly what someone who put
+another person's address on their Moodle profile would need.
+
+A database seeded from a guest list before this has guest rows no Moodle account is
+linked to, holding everyone's email — so each of those people would be turned away as
+"email-taken". Delete them once, after `pnpm db:push` (take a backup first; their
+check-ins and device keys go with them):
+
+```sql
+-- Off by default in the sqlite3 CLI; without it the check-ins and keys stay behind.
+pragma foreign_keys = on;
+delete from user where role = 'attendee' and lti_subject is null;
 ```
-
-Guests are matched by the email address Moodle reports for them, so the list has to use
-the addresses their Moodle profiles have.
 
 ### Admins and the superadmin
 
@@ -175,7 +188,8 @@ an admin like any other, plus two things under **Organizers** on `/admin`, where
 also sees who the admins are:
 
 - **Make a guest an organizer**, by email and an initial password it chooses and
-  passes on. Only guests already on the list can be promoted.
+  passes on. Only existing guests can be promoted, so they have to have opened the
+  Moodle activity once.
 - **Reset an organizer's password** to a temporary one, for an admin who forgot
   theirs. It signs that admin out everywhere. The superadmin's own password can't be
   reset this way; nobody is above it.
@@ -199,8 +213,9 @@ while there is no superadmin, so it can't be used to add a second one.
 ## Setting up a phone
 
 The guest opens the check-in activity in Moodle **on the phone they'll bring**. Moodle
-launches the tool, vouching for who they are, and the tool looks their email up in the
-guest list and sends them to `/lti-link/enroll`. There they tap **Set up this phone**:
+launches the tool, vouching for who they are, and the tool finds or creates the guest
+(see [How guests get in](#how-guests-get-in)) and sends them to `/lti-link/enroll`. There
+they tap **Set up this phone**:
 
 1. The browser makes an ECDSA P-256 key pair with WebCrypto, the private half
    **non-extractable** — scripts on the page can sign with it, but nothing can read it
@@ -209,8 +224,8 @@ guest list and sends them to `/lti-link/enroll`. There they tap **Set up this ph
 3. The server stores the public key against the guest (`device_key`), replacing any
    earlier one.
 
-The proof of the launch is an enrollment token: HMAC-signed, naming the guest and the
-Moodle account, and good for 15 minutes. It travels in the URL **fragment**, which
+The proof of the launch is an enrollment token: HMAC-signed, naming the guest, and good
+for 15 minutes. It travels in the URL **fragment**, which
 browsers never send to a server, so it can't end up in a log or a `Referer`, and the page
 takes it out of the address bar as soon as it loads. Setting up a key spends it: a token
 issued before the guest's current key was set up is turned down.
@@ -238,8 +253,9 @@ usually Safari on an iPhone and Chrome on Android. Two things get in the way:
 - **Moodle embedding the tool.** Opened in a frame on Moodle's page, the tool's storage is
   partitioned under Moodle's site (all current browsers do this for third-party frames),
   so a key saved there is invisible to the tab a scan opens. The setup page detects the
-  frame and offers a **Continue in a new tab** button, but set the activity to open in a
-  new window (see [Moodle](#moodle)) to avoid the detour.
+  frame and offers a **Continue in a new tab** button, which sets the phone up in a tab
+  of its own. Embedding works that way; opening the activity in a new window (see
+  [Moodle](#moodle)) just saves guests that one tap.
 - **The Moodle app.** It opens external tools in its own browser view, whose storage
   isn't the phone's browser's. Guests should use Moodle in the phone's browser for this.
 
@@ -258,7 +274,9 @@ enrollment signs `enroll:<token>` — the prefixes keep a signature made for one
 passing for the other.
 
 Admins can check in with their passkey through "Organizer? Check in with your
-passkey" on `/checkin`, or set up a device key through Moodle like everyone else.
+passkey" on `/checkin`. One promoted from a guest also still has the device key they set
+up as a guest. The seeded superadmin has no Moodle account linked, so for them it is the
+passkey.
 
 Every check-in puts a row in `check_in`. Re-entry is normal, so a guest may have several
 rows. A double submit is not: the unique index on `(user_id, scan_id)` collapses
@@ -268,8 +286,11 @@ The admin showing the code gets checked in too. The first time a guest checks in
 through their screen, a second row goes in for the admin, with `method = 'host'` and
 the guest's `scan_id`, so the log shows the two side by side. It happens only if the
 admin has no check-in yet. If they checked in themselves first, or an earlier guest
-already did it for them, nothing is added. `expected` on the check-in screen counts
-admins, so they can't push `present` past it.
+already did it for them, nothing is added.
+
+The check-in screen shows how many are present, and not "of how many": with no guest
+list, the app only knows who has opened the Moodle activity so far, which says nothing
+about who is coming.
 
 `host` means "this admin was signed in on the screen showing the code a guest just
 scanned". It is weaker than `device` or `passkey`: nobody confirmed who was standing at
@@ -280,8 +301,9 @@ the same.
 ### What stops abuse
 
 Checking a guest in takes their phone — or rather, the key its browser made — plus a code
-seen at the door in the last half-minute. Setting that key up takes their Moodle login.
-Nobody can check a guest in from their email address alone any more.
+seen at the door in the last half-minute. Setting that key up takes their Moodle login,
+and a guest is their Moodle account, not an email address: nobody can take a guest over
+by putting their address on another Moodle profile.
 
 What it does **not** stop:
 
@@ -293,12 +315,9 @@ What it does **not** stop:
 - **Checking in from elsewhere.** A photo of the code, sent to an absent guest within its
   30 seconds, checks them in from wherever they are. The address and user agent columns
   and the door screen are what catch this.
-- **A Moodle account with someone else's email.** Guests are found by the email Moodle
-  reports. Moodle normally makes users confirm a new address by mail, but a site can turn
-  that off, or let users edit their email freely. The first Moodle account to set up a
-  guest is pinned (`device_key.lti_subject`), so an impostor can't take over a guest who
-  already set up — but one who gets there first can. If the Moodle site lets users edit
-  their email, check the log.
+- **Anyone who can open the activity.** There is no list to be on: everyone in the
+  course becomes a guest by opening it. So does anyone in a course the tool is added to,
+  if it is added site-wide (see [Courses](#courses)).
 
 What catches the rest is the screen at the door. Every check-in shows up there as it
 happens, as a toast with the guest's name, and the last five stay listed under the code.
@@ -347,12 +366,13 @@ With a `BASE_PATH`, it goes between `ORIGIN` and `/lti-link`.
 1. In the course, go to **More → LTI External tools → Add tool**
    (`/mod/lti/coursetools.php?id=<course id>`). If there's no button, the Moodle site's
    admins have to allow course-level tools or add it for you.
-2. Fill in the URLs above, LTI version **LTI 1.3**, and under **Privacy** set
-   **Share launcher's email with tool** to **Always** — without the email, nobody can be
-   matched to the guest list, and the setup page says so. Name is optional, the ID is
-   all ltijs keeps.
-3. Set **Default launch container** to **New window**. Embedded in Moodle's page, the key
-   would land in storage the scanning tab can't see (see [Which browser](#which-browser)).
+2. Fill in the URLs above, LTI version **LTI 1.3**, and under **Privacy** set both
+   **Share launcher's name with tool** and **Share launcher's email with tool** to
+   **Always** — a new guest is created from them, and without them the setup page says
+   Moodle didn't share what it needs.
+3. Optionally, set **Default launch container** to **New window**. Embedded in Moodle's
+   page works too, but guests have to tap "Continue in a new tab" first (see
+   [Which browser](#which-browser)).
 4. Save. Moodle then shows a **Client ID**. Register it here:
 
    ```sh
@@ -460,7 +480,7 @@ delete from passkey where user_id in (select id from user where role = 'attendee
 | `pnpm auth:schema`                               | Regenerate `src/lib/server/db/auth.schema.ts` from the better-auth config    |
 | `pnpm db:push`                                   | Apply the schema straight to the DB (no migration files)                     |
 | `pnpm db:backup` / `pnpm db:restore`             | Snapshot the DB, and put a snapshot back (see [Backups](#backups))           |
-| `pnpm db:seed`                                   | Seed the superadmin and the guest list                                       |
+| `pnpm db:seed`                                   | Create the superadmin                                                        |
 | `pnpm lti:register-platform`                     | Register a Moodle site's client ID with the LTI tool (see [Moodle](#moodle)) |
 | `pnpm db:generate` / `pnpm db:migrate`           | Generate / apply migration files                                             |
 | `pnpm db:studio`                                 | Drizzle Studio                                                               |
@@ -527,13 +547,15 @@ only additions there are columns on `user`, declared in `src/lib/server/auth.ts`
   `src/lib/server/roles.ts`, never `role = 'admin'`, or the superadmin gets locked out.
 - `must_change_password` — set when the superadmin promotes a guest with an initial
   password, cleared once they replace it.
+- `lti_subject` — the Moodle account a guest was created from, `["<iss>","<sub>"]`,
+  unique. Every launch finds its guest by it. Empty for the seeded superadmin.
 
 Deliberately absent:
 
 - No summary or attendance table — the log page derives its counts from `check_in` on
   each load, and a stored total can only drift from the rows it claims to count.
-- No invite table — a seeded row goes straight into `user`, and the `UNIQUE` constraint
-  on email is the dedupe.
+- No guest list or invite table — a guest's `user` row is created by their first Moodle
+  launch, and the `UNIQUE` constraint on `lti_subject` is the dedupe.
 - No QR or enrollment-token table — both are signed and carry their own expiry (see
   above). An enrollment is spent by the key it sets up, through `device_key.created_at`.
 - No `auth_method` column on `user` — a guest's `device_key` row, and an admin's

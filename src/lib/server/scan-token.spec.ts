@@ -71,7 +71,7 @@ test('a scan reports when it happened and gets a handle that is not the token', 
 	expect(verifyPresence(scanId(presence), now)).toBeNull();
 });
 
-const ada = { userId: 'ada', ltiSubject: '["https://moodle.example","42"]', firstName: 'Ada' };
+const ada = { userId: 'ada', firstName: 'Ada' };
 
 test('an enrollment says who launched, for 15 minutes and no longer', () => {
 	const now = Date.now();
@@ -89,9 +89,6 @@ test('an enrollment cannot be moved to another guest or stretched', () => {
 
 	expect(verifyEnrollment(forge({ userId: 'grace' }), now)).toBeNull();
 	expect(verifyEnrollment(forge({ issuedAt: now + 60_000 }), now)).toBeNull();
-	expect(
-		verifyEnrollment(forge({ ltiSubject: '["https://moodle.example","43"]' }), now)
-	).toBeNull();
 	expect(verifyEnrollment(undefined)).toBeNull();
 	expect(verifyEnrollment('garbage')).toBeNull();
 });

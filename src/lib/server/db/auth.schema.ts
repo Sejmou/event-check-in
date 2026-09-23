@@ -19,6 +19,7 @@ export const user = sqliteTable("user", {
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   role: text("role").default("attendee"),
+  ltiSubject: text("lti_subject").unique(),
   mustChangePassword: integer("must_change_password", {
     mode: "boolean",
   }).default(false),

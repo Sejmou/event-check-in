@@ -70,12 +70,6 @@ export const deviceKey = sqliteTable('device_key', {
 		.references(() => user.id, { onDelete: 'cascade' }),
 	/** P-256 public key as a JWK: `{ kty, crv, x, y }`. */
 	publicKey: text('public_key', { mode: 'json' }).$type<PublicJwk>().notNull(),
-	/**
-	 * `iss` and `sub` of the Moodle account that set it up. Once set, only that
-	 * account can replace the key — someone who gets the guest's email address
-	 * onto their own Moodle profile can't take the guest's check-in over.
-	 */
-	ltiSubject: text('lti_subject').notNull(),
 	/** Enrollment links issued before this are spent. */
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
 	userAgent: text('user_agent')

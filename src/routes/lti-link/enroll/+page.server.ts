@@ -8,16 +8,14 @@ import { verifyEnrollment } from '$lib/server/scan-token';
 import type { Actions, PageServerLoad } from './$types';
 
 const PROBLEMS = {
-	'no-email':
-		"Moodle didn't tell us your email address, so we can't find you on the guest list. Let the organizers know: the activity's privacy settings in Moodle need to share it.",
-	'not-invited':
-		"The email address on your Moodle profile isn't on the guest list. Let the organizers know."
+	'no-profile':
+		"Moodle didn't tell us your name and email address, which we need to set you up. Let the organizers know: the activity's privacy settings in Moodle need to share both.",
+	'email-taken':
+		"Your email address already belongs to another account here, for example an organizer's. Organizers check in with their passkey. Anyone else: let the organizers know."
 } as const;
 
 const EXPIRED =
 	'This setup link has expired or was already used. Open the check-in activity in Moodle again.';
-const OTHER_ACCOUNT =
-	'Check-in for this guest was set up from a different Moodle account. Let the organizers know.';
 const BAD_KEY = 'Something went wrong creating the key. Try again.';
 
 export const load: PageServerLoad = ({ url }) => {
@@ -59,11 +57,10 @@ export const actions: Actions = {
 			if (!guest) return EXPIRED;
 
 			const existing = tx
-				.select({ ltiSubject: deviceKey.ltiSubject, createdAt: deviceKey.createdAt })
+				.select({ createdAt: deviceKey.createdAt })
 				.from(deviceKey)
 				.where(eq(deviceKey.userId, guest.id))
 				.get();
-			if (existing && existing.ltiSubject !== enrollment.ltiSubject) return OTHER_ACCOUNT;
 			// A key set up since this link was issued spent it.
 			if (existing && existing.createdAt.getTime() >= enrollment.issuedAt) return EXPIRED;
 
@@ -72,7 +69,6 @@ export const actions: Actions = {
 			const values = {
 				id: crypto.randomUUID(),
 				publicKey,
-				ltiSubject: enrollment.ltiSubject,
 				createdAt: new Date(),
 				userAgent: event.request.headers.get('user-agent')
 			};

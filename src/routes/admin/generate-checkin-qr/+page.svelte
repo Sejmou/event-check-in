@@ -44,7 +44,9 @@
 
 <QrScreen title="Scan to check in" qr={data.qr} msUntilNextBucket={data.msUntilNextBucket}>
 	<p class="text-gray-600">
-		{data.present} of {data.expected} guests here. This code changes automatically — leave this page open.
+		{data.present}
+		{data.present === 1 ? 'guest' : 'guests'} here. This code changes automatically — leave this page
+		open.
 	</p>
 
 	<section class="w-full max-w-md">

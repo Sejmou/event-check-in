@@ -23,8 +23,9 @@ export function listAdmins() {
 
 /**
  * Makes a guest an admin who signs in with `password` and has to replace it on
- * their first sign-in. Only guests: accounts still come from the guest list, and
- * this never touches an existing admin's password.
+ * their first sign-in. Only guests: accounts still come from Moodle launches, so
+ * someone has to have opened the activity once, and this never touches an
+ * existing admin's password.
  */
 export async function promoteToAdmin(email: string, password: string) {
 	const [found] = await db

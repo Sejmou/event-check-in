@@ -47,7 +47,9 @@ export const actions: Actions = {
 
 		switch (await promoteToAdmin(email, password)) {
 			case 'not-found':
-				return failure(`${email} is not on the guest list.`);
+				return failure(
+					`No guest has ${email} yet. They have to open the check-in activity in Moodle once first.`
+				);
 			case 'already-admin':
 				return failure(`${email} is already an organizer.`);
 			case 'promoted':

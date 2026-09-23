@@ -92,8 +92,6 @@ export function scanId(value: string) {
 
 export type Enrollment = {
 	userId: string;
-	/** `iss` and `sub` of the Moodle account that launched. See `deviceKey.ltiSubject`. */
-	ltiSubject: string;
 	/** Only so the setup page can greet them; the server never reads it back. */
 	firstName: string;
 	issuedAt: number;

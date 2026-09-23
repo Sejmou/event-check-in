@@ -1,37 +1,44 @@
 /**
- * Seeds the guest list and makes one of its entries the superadmin (interactively):
- * an admin who can also promote other guests to admin on /admin.
+ * Creates the superadmin (interactively): an admin who can also promote guests to
+ * admin on /admin. Guests aren't seeded — they are created on their first Moodle
+ * launch.
  *
- *   pnpm db:seed --admin ops@corp.com data/attendees.json
+ *   pnpm db:seed --admin ops@corp.com --first-name Ada --last-name Lovelace
  *
- * The superadmin must appear in the guest list — their name comes from that entry.
- * Re-runnable: existing emails are left alone. One exception, for databases seeded
- * before superadmins existed: while there is no superadmin, an existing admin
- * given as --admin becomes it.
+ * Re-runnable: an existing email is left alone. One exception, for databases
+ * seeded before superadmins existed: while there is no superadmin, an existing
+ * admin given as --admin becomes it.
  */
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
-import { readFile } from 'node:fs/promises';
+import { parseArgs } from 'node:util';
 import { eq } from 'drizzle-orm';
 import { MIN_PASSWORD_LENGTH } from '../src/lib/server/admins';
 import { auth } from '../src/lib/server/auth';
 import { db } from '../src/lib/server/db';
 import { user } from '../src/lib/server/db/schema';
 
-type Attendee = { email: string; firstName: string; lastName: string };
+type Superadmin = { email: string; firstName: string; lastName: string };
 
-function parseArgs(argv: string[]) {
-	const usage = 'pnpm db:seed --admin ops@corp.com data/attendees.json';
-	const flag = argv.indexOf('--admin');
-	if (flag === -1 || !argv[flag + 1]) {
-		throw new Error(`--admin <email> is required, e.g. ${usage}`);
+const USAGE = 'pnpm db:seed --admin ops@corp.com --first-name Ada --last-name Lovelace';
+
+function readArgs(): Superadmin {
+	const { values } = parseArgs({
+		options: {
+			admin: { type: 'string' },
+			'first-name': { type: 'string' },
+			'last-name': { type: 'string' }
+		}
+	});
+	const email = values.admin?.trim().toLowerCase();
+	const firstName = values['first-name']?.trim();
+	const lastName = values['last-name']?.trim();
+	if (!email || !firstName || !lastName) {
+		throw new Error(`--admin, --first-name and --last-name are required, e.g. ${USAGE}`);
 	}
-	const adminEmail = argv[flag + 1];
-	const attendeesFile = argv.filter((_, i) => i !== flag && i !== flag + 1)[0];
-	if (!attendeesFile) {
-		throw new Error(`a guest list file is required, e.g. ${usage}`);
-	}
-	return { adminEmail, attendeesFile };
+	// better-auth lower-cases the addresses it writes, and the unique index is
+	// case-sensitive — hence the lower-casing above.
+	return { email, firstName, lastName };
 }
 
 /**
@@ -87,7 +94,7 @@ async function readAdminPassword() {
 	}
 }
 
-async function seedSuperadmin({ email, firstName, lastName }: Attendee) {
+async function seedSuperadmin({ email, firstName, lastName }: Superadmin) {
 	const ctx = await auth.$context;
 
 	const [existing] = await db
@@ -130,51 +137,4 @@ async function seedSuperadmin({ email, firstName, lastName }: Attendee) {
 	console.log(`Created superadmin ${email}.`);
 }
 
-async function readAttendees(file: string): Promise<Attendee[]> {
-	const attendees: Attendee[] = JSON.parse(await readFile(file, 'utf8'));
-
-	return attendees.map(({ email, firstName, lastName }) => {
-		if (!email || !firstName || !lastName) {
-			throw new Error(
-				`every attendee needs email, firstName and lastName: ${JSON.stringify({ email, firstName, lastName })}`
-			);
-		}
-		// better-auth lower-cases the addresses it writes, and the unique index is
-		// case-sensitive — an unnormalized list seeds a second row for the same person.
-		return { email: email.trim().toLowerCase(), firstName, lastName };
-	});
-}
-
-async function seedAttendees(attendees: Attendee[], file: string) {
-	const rows = attendees.map(({ email, firstName, lastName }) => ({
-		id: crypto.randomUUID(),
-		email,
-		name: `${firstName} ${lastName}`,
-		firstName,
-		lastName,
-		role: 'attendee',
-		emailVerified: false
-	}));
-
-	if (!rows.length) return console.log(`${file} is empty — nothing to seed.`);
-
-	// The UNIQUE constraint on email is the dedupe; re-running is a no-op, and the
-	// superadmin — already inserted above with their role — is skipped the same way.
-	await db.insert(user).values(rows).onConflictDoNothing({ target: user.email });
-
-	const seeded = await db.$count(user, eq(user.role, 'attendee'));
-	console.log(`Seeded ${rows.length} attendee(s) from ${file}; ${seeded} on the guest list now.`);
-}
-
-const { adminEmail, attendeesFile } = parseArgs(process.argv.slice(2));
-const attendees = await readAttendees(attendeesFile);
-
-const superadmin = attendees.find((a) => a.email === adminEmail.trim().toLowerCase());
-if (!superadmin) {
-	throw new Error(
-		`${adminEmail} is not in ${attendeesFile} — the superadmin must be on the guest list.`
-	);
-}
-
-await seedSuperadmin(superadmin);
-await seedAttendees(attendees, attendeesFile);
+await seedSuperadmin(readArgs());
